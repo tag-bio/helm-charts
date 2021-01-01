@@ -1,0 +1,13 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: test-claim
+  annotations:
+    volume.beta.kubernetes.io/storage-class: {{ .Values.namePrefix }}-storage
+spec:
+  storageClassName: {{ .Values.namePrefix }}-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Mi

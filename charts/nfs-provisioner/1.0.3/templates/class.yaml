@@ -1,0 +1,7 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.namePrefix }}-storage
+provisioner: {{ .Values.namePrefix }}-provisioner
+parameters:
+  archiveOnDelete: "false"
