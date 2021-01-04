@@ -1,0 +1,12 @@
+environment:
+  nfs:
+    host: ''
+    path: /
+platform:
+  namespaces:
+    app: tagbio-app
+    system: tagbio-system
+  services:
+    nfs-path-provisioner:
+      image: quay.io/external_storage/nfs-client-provisioner
+      tag: v3.1.0-k8s1.11
