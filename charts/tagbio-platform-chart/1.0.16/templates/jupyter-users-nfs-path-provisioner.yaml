@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jupyter-users-nfs-path-provisioner
+  labels:
+    app: jupyter-users-nfs-path-provisioner
+  namespace: {{ .Values.platform.namespaces.system }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jupyter-users-nfs-path-provisioner
+  template:
+    metadata:
+      labels:
+        app: jupyter-users-nfs-path-provisioner
+    spec:
+      serviceAccountName: nfs-path-provisioner
+      containers:
+        - name: jupyter-users-nfs-path-provisioner
+          image: {{ .Values.platform.services.nfsPathProvisioner.image }}:{{ .Values.platform.services.nfsPathProvisioner.tag }}
+          volumeMounts:
+            - name: nfs-client-root
+              mountPath: /persistentvolumes
+          env:
+            - name: PROVISIONER_NAME
+              value: jupyter-users-nfs-path-provisioner
+            - name: NFS_SERVER
+              value: {{ .Values.environment.nfs.host }}
+            - name: NFS_PATH
+              value: {{ .Values.environment.nfs.path }}
+      volumes:
+        - name: nfs-client-root
+          nfs:
+            server: {{ .Values.environment.nfs.host }}
+            path: /jupyter/users
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: jupyter-users-nfs-path-storage
+provisioner: jupyter-users-nfs-path-provisioner
+parameters:
+  archiveOnDelete: "false"
+  pathPattern: "${PVC.name}"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: test-claim
+  annotations:
+    volume.beta.kubernetes.io/storage-class: jupyter-users-nfs-path-storage
+spec:
+  storageClassName: jupyter-users-nfs-path-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Mi
+---
+kind: Pod
+apiVersion: v1
+metadata:
+  name: test-pod
+spec:
+  containers:
+  - name: test-pod
+    image: gcr.io/google_containers/busybox:1.24
+    command:
+      - "/bin/sh"
+    args:
+      - "-c"
+      - "touch /mnt/SUCCESS && exit 0 || exit 1"
+    volumeMounts:
+      - name: nfs-pvc
+        mountPath: "/mnt"
+  restartPolicy: "Never"
+  volumes:
+    - name: nfs-pvc
+      persistentVolumeClaim:
+        claimName: test-claim
