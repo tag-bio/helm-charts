@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tagbio-jupyter-storage-pv
+spec:
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 10Gi
+  nfs:
+    path: /jupyter
+    readOnly: false
+    server: {{ .Values.environment.nfs.host }}
