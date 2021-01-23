@@ -1,0 +1,23 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jupyter-nfs-path-create-job
+spec:
+  template:
+    metadata:
+      labels:
+        job-name: jupyter-nfs-path-create-job
+    spec:
+      containers:
+        - command: ['sh', '-c', 'mkdir -p /nfs-root/jupyter/hub /nfs-root/jupyter/users']
+          image: alpine
+          name: jupyter-nfs-path-create-job-mkdir
+          volumeMounts:
+            - name: nfs-client-root
+              mountPath: /nfs-root
+      restartPolicy: OnFailure
+      volumes:
+        - name: nfs-client-root
+          nfs:
+            server: {{ .Values.environment.nfs.host }}
+            path: {{ .Values.environment.nfs.path }}
