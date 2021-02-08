@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    workload.user.cattle.io/workloadselector: deployment-tagbio-metacontroller
+  name: tagbio-metacontroller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      workload.user.cattle.io/workloadselector: deployment-tagbio-metacontroller
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        workload.user.cattle.io/workloadselector: deployment-tagbio-metacontroller
+    spec:
+      containers:
+      - image: metacontroller/jsonnetd
+        imagePullPolicy: Always
+        name: tagbio-metacontroller
+        volumeMounts:
+        - mountPath: /jsonnetd/hooks
+          name: hooks
+        workingDir: /jsonnetd/hooks
+      imagePullSecrets:
+      - name: docker-hub-creds
+      volumes:
+      - configMap:
+          defaultMode: 256
+          name: tagbio-hooks
+          optional: true
+        name: hooks
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tagbio-metacontroller
+spec:
+  clusterIP: None
+  ports:
+  - name: default
+    port: 42
+    protocol: TCP
+    targetPort: 42
+  selector:
+    workload.user.cattle.io/workloadselector: deployment-tagbio-metacontroller
+  sessionAffinity: None
+  type: ClusterIP
