@@ -1,0 +1,17 @@
+#  kubectl get networkpolicies --all-namespaces
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tagbio-firewall-network-policy
+  namespace: tagbio-app
+spec:
+  podSelector:
+    matchLabels:
+      firewall.tag.bio/role: protected
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              firewall.tag.bio/role: gateway
