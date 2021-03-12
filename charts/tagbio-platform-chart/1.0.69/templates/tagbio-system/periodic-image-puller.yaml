@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  annotations:
+  labels:
+    workload.user.cattle.io/workloadselector: deployment-tagbio-system-periodic-image-puller
+  name: periodic-image-puller
+  namespace: tagbio-system
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      workload.user.cattle.io/workloadselector: deployment-tagbio-system-periodic-image-puller
+  template:
+    spec:
+      containers:
+        - args:
+            - sh
+            - -c
+            - echo "tagbio periodic-image-puller waiting to recycle" && sleep 900
+          image: platform-registry.dev.tag.bio/tagbio-ci-pipeline:branch-master
+          imagePullPolicy: Always
+          name: periodic-image-puller
+      initContainers:
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "kung" "tag" .Values.tagbio.imageTag) | indent 8}}
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "kung-services" "tag" .Values.tagbio.imageTag) | indent 8}}
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "login-service" "tag" .Values.tagbio.imageTag) | indent 8}}
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "notification-service" "tag" .Values.tagbio.imageTag) | indent 8}}
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "rutherford" "tag" .Values.tagbio.imageTag) | indent 8}}
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "platform-utils" "tag" .Values.tagbio.imageTag) | indent 8}}
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "tagbio-ci-builder" "tag" .Values.tagbio.imageTag) | indent 8}}
+{{- include "tagbio.imagePullerContainerSpec" (dict "registry" "platform-registry.dev.tag.bio" "image" "tagbio-ci-pipeline" "tag" .Values.tagbio.imageTag) | indent 8}}
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+      restartPolicy: Always
