@@ -1,0 +1,83 @@
+{{- range $name, $spec := .Values.tagbio.publicFcs }}
+{{- if $spec.enabled -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: tagbio-app
+spec:
+  progressDeadlineSeconds: 3600
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    spec:
+      affinity: {}
+      containers:
+        - args:
+            - sh
+            - -c
+            - >-
+              java
+{{- range $key, $val := $spec.fcCommand.javaArgs }}
+                -{{ $key }}{{ $val }}
+{{- end }}
+                -jar $TAGBIO_JARS/{{ $spec.fcCommand.jar }}
+{{- range $key, $val := $spec.fcCommand.fcArgs }}
+                {{ $key }}={{ $val }}
+{{- end -}}
+                archive=./archive.ser
+                cache_dir=/storage/blobs/{{ $name }}
+                cache_salt=$(cat $TAGBIO_FC_DIR/VERSION.txt)
+                commit=$(cat $TAGBIO_FC_DIR/VERSION.txt)
+                main=main.json
+                process_count=$(nproc)
+                r_sdk=$TAGBIO_R_UTILS
+          envFrom:
+            - secretRef:
+                name: tagbio-aws
+          image: platform-registry.dev.tag.bio/{{ $name }}:{{ $.Values.tagbio.imageTag }}
+          imagePullPolicy: Always
+          livenessProbe:
+            failureThreshold: 2
+            initialDelaySeconds: 300
+            periodSeconds: 15
+            successThreshold: 1
+            tcpSocket:
+              port: 8000
+            timeoutSeconds: 5
+          name: {{ $name }}
+          readinessProbe:
+            failureThreshold: 2
+            initialDelaySeconds: 300
+            periodSeconds: 15
+            successThreshold: 1
+            tcpSocket:
+              port: 8000
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: {{ if $spec.reservation.cpu -}}{{ $spec.reservation.cpu }}{{- else -}}100m{{- end }}
+              memory: {{ if $spec.reservation.memory -}}{{ $spec.reservation.memory }}{{- else -}}1G{{- end }}
+          volumeMounts:
+            - mountPath: /storage
+              name: storage
+{{- if $spec.workingDir }}
+          workingDir: {{ $spec.workingDir }}
+{{- end }}
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+        - name: tagbio-cluster-registry-creds
+        - name: docker-hub-creds
+      restartPolicy: OnFailure
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: tagbio-storage
+{{- end }}
+{{- end }}
