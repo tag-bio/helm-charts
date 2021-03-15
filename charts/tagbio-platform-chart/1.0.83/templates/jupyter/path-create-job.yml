@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jupyter-path-create-job
+spec:
+  template:
+    metadata:
+      labels:
+        deployment.tag.bio/helm-release-revision: {{ .Release.Revision }}
+        job-name: jupyter-path-create-job
+    spec:
+      containers:
+        - command: ['sh', '-c', 'mkdir -p /storage/jupyter/hub /storage/jupyter/users']
+          image: alpine
+          name: jupyter-path-create-job-mkdir
+          volumeMounts:
+            - name: storage-root
+              mountPath: /storage
+      restartPolicy: OnFailure
+      volumes:
+        - name: storage-root
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+          azureFile:
+            readOnly: false
+            secretName: {{ .Values.environment.azure.secret.name }}
+            shareName: {{ .Values.environment.azure.fileshare.name }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+          nfs:
+            server: {{ .Values.environment.nfs.host }}
+            path: {{ .Values.environment.nfs.path }}
+{{ end }}
