@@ -1,0 +1,295 @@
+environment:
+  azure:
+    fileshare:
+      name: 'tagbio-shared'
+    secret:
+      name: 'tagbio-storage-azure-fileshare'
+      namespace: 'tagbio-app'
+  nfs:
+    host: ''
+    path: /
+  storageVolumeType: 'nfs'
+jupyterhub:
+  auth:
+    admin:
+      access: true
+      users:
+        - support@tag.bio
+    custom:
+      className: oauthenticator.generic.GenericOAuthenticator
+      config:
+        login_service: tag.bio
+        client_id: tagbio-login-client
+        client_secret: ""
+        token_url: ""
+        userdata_url: ""
+        userdata_method: GET
+        userdata_params: {'state': 'state'}
+        username_key: email
+    type: custom
+    whitelist:
+      users:
+        - support@tag.bio
+  hub:
+    cookieSecret: ""
+    db:
+      pvc:
+        selector:
+          matchLabels:
+            jupyter.tag.bio/name: tagbio-jupyter-hub-storage-pv
+      type: "sqlite-pvc"
+    extraConfig: |
+      c.ContentsManager.allow_hidden = True
+    extraEnv:
+      OAUTH2_AUTHORIZE_URL: ""
+      OAUTH2_TOKEN_URL: ""
+      OAUTH_CALLBACK_URL: ""
+    initContainers:
+      - command: ['sh', '-c', 'echo chowning; shopt -o dotglob; chown -vR jovyan:users /srv/jupyterhub']
+        image: jupyterhub/k8s-hub:0.10.6
+        imagePullPolicy: IfNotPresent
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: /srv/jupyterhub
+          name: hub-db-dir
+    labels:
+      firewall.tag.bio/role: gateway
+    networkPolicy:
+      enabled: false
+  imagePullSecrets:
+    - name: docker-hub-creds
+    - name: tagbio-cluster-registry-creds
+    - name: tagbio-platform-registry-creds
+  ingress:
+    enabled: true
+    hosts: []
+    tls:
+      - hosts: []
+        secretName: tagbio-cluster
+  proxy:
+    chp:
+      networkPolicy:
+        enabled: false
+    secretToken: ""
+    service:
+      type: ClusterIP
+  singleuser:
+    cmd: jupyterhub-singleuser --ContentsManager.allow_hidden=True
+    defaultUrl: "/lab"
+    extraAnnotations:
+      service-per-pod-label: 'tag.bio/jupyter-podname'
+      service-per-pod-ports: '8000:8000'
+    extraLabels:
+      firewall.tag.bio/role: not-protected
+      hub.jupyter.org/network-access-hub: 'true'
+      io.cattle.field/appId: tagbio-platform
+      tag.bio/jupyter-podname: 'jupyter-{username}'
+      tag.bio/jupyter-username: '{username}'
+    image:
+      name: platform-registry.dev.tag.bio/tagbio-notebook
+      pullPolicy: IfNotPresent
+      tag: branch-master
+      # name: jupyter/datascience-notebook
+      # tag: 'lab-2.2.9'
+    initContainers:
+      - command: ['/usr/bin/bash', '-c', 'echo copying and chowning; cp -nR /tagbio-notebook/tagbio-home-init/. /home/jovyan ; chown -vR jovyan:users /home/jovyan ; ls -alh /home/jovyan ; chmod -vR go-rwx /home/jovyan']
+        image: platform-registry.dev.tag.bio/tagbio-notebook:branch-master
+        imagePullPolicy: Always
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+          - mountPath: /home/jovyan
+            name: home
+            subPath: '{username}'
+    networkPolicy:
+      enabled: false
+    storage:
+      extraVolumes:
+        - name: jupyter-shared
+          persistentVolumeClaim:
+            claimName: tagbio-jupyter-users-shared-storage-pvc
+      extraVolumeMounts:
+        - mountPath: /home/jovyan/tagbio-jupyter-shared
+          name: jupyter-shared
+      static:
+        pvcName: tagbio-jupyter-users-storage-pvc
+        subPath: '{username}'
+      type: static
+tagbio:
+  imageTag: branch-master
+  gateway:
+    baseUrlInternal: http://kung.tagbio-app.svc.cluster.local/
+  publicFcs:
+    fc-catalyze:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          process_count: "$(nproc)"
+          main: main.json
+          r_sdk: "$TAGBIO_R_UTILS"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 16G
+    fc-celluloid:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          process_count: "$(nproc)"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 4g
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-darkside:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: darkside-data/archive.ser
+          process_count: "$(nproc)"
+          main: main.json
+          s3_bucket: tagbio-customer-data
+        jar: fc_s3_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 750M
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 750M
+    fc-friday:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: true
+          process_count: "$(nproc)"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 8G
+    fc-gene:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          process_count: "$(nproc)"
+          protocols: protocols.txt
+          protocols_dir: "./"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 7G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-halleloo:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          process_count: "$(nproc)"
+          protocols: protocols.txt
+          protocols_dir: "./"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 500M
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 500M
+    fc-metabric:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          process_count: "$(nproc)"
+          main: main.json
+          s3_bucket: tagbio-customer-data
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-roy:
+      enabled: true
+      workingDir: /fc/public
+      fcCommand:
+        fcArgs:
+          config: config/config.json
+          groups: true
+          process_count: "$(nproc)"
+          protocols: protocols.txt
+          protocols_dir: "./"
+          sql_connection: "deploy/connection_custprem_cluster.json"
+        jar: fc_sql_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 6G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-topaz:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          process_count: "$(nproc)"
+          protocols: protocols.txt
+          protocols_dir: "./"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 2G
+    fc-variant:
+      enabled: true
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          process_count: "$(nproc)"
+          protocols: protocols.txt
+          protocols_dir: "./"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 700
+      reservation:
+        memory: 8G
+  redeploySchedule: 0 10 * * *
