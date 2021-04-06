@@ -1,0 +1,19 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kung-services
+  namespace: {{ .Values.tagbio.namespaces.app }}
+type: Opaque
+stringData:
+  DB_CONNECTION: /storage/kung-services/db/kung-services.sqlite
+  LOG_LEVEL: info
+  NODE_ENV: production
+  PORT: "8001"
+  SITE_NAME: {{ .Values.tagbio.site.name }}
+  TAGBIO_BASE_URL: {{ .Values.tagbio.gateway.baseUrlInternal }}
+  TAGBIO_ADMIN_EMAIL: {{ .Values.tagbio.site.adminEmail }}
+  TAGBIO_BLOB_DIR: /storage/blobs
+
+---
+{{ include "tagbio.coreStackService" (dict "Chart" .Chart "name" "kung-services" "storageVolume" true "Values" .Values ) }}
