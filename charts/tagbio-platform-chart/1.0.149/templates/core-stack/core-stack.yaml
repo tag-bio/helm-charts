@@ -1,0 +1,48 @@
+{{- if .Values.tagbio.coreStack.enabled -}}
+
+# kung
+---
+{{ include "tagbio.secretPreamble" (dict "name" "kung" "namespace" .Values.tagbio.namespaces.app )}}
+  EG_CONFIG_DIR: /app/config-cluster
+  KUNG_API_KEYS_FILE: /api-keys/api-keys.txt
+  KUNG_COGNITO_CONFIG_URL: http://login-service:8000/well-known/configuration
+  KUNG_IDP_CLIENT_IDS: tagbio-login-client
+  KUNG_IDP_ISSUERS: https://{{ .Values.tagbio.hosts.cluster }}/login-service
+  KUNG_PORT_HTTP: "8000"
+  KUNG_PORT_HTTPS: "8443"
+  KUNG_ROOT_PATH: ''
+  KUNG_RUTHERFORD_HOST: rutherford
+  KUNG_SERVICES_URI: http://kung-services:8001
+  KUNG_SITE: {{ .Values.tagbio.site.name }}
+  LOG_LEVEL: info
+  NODE_ENV: production
+---
+{{ include "tagbio.coreStackService" (dict "Chart" .Chart "firewall" "gateway" "name" "kung" "storageVolume" true "Values" .Values ) }}
+
+# kung-services
+---
+{{ include "tagbio.secretPreamble" (dict "name" "kung-services" "namespace" .Values.tagbio.namespaces.app )}}
+  DB_CONNECTION: /storage/kung-services/db/kung-services.sqlite
+  LOG_LEVEL: info
+  NODE_ENV: production
+  PORT: "8001"
+  SITE_NAME: {{ .Values.tagbio.site.name }}
+  TAGBIO_BASE_URL: {{ .Values.tagbio.gateway.baseUrlExternal }}
+  TAGBIO_ADMIN_EMAIL: {{ .Values.tagbio.site.adminEmail }}
+  TAGBIO_BLOB_DIR: /storage/blobs
+---
+{{ include "tagbio.coreStackService" (dict "Chart" .Chart "firewall" "protected" "name" "kung-services" "storageVolume" true "Values" .Values ) }}
+
+# notification-service
+---
+{{ include "tagbio.secretPreamble" (dict "name" "notification-service" "namespace" .Values.tagbio.namespaces.app )}}
+  TAGBIO_EMAIL_FROM: Tag.bio Notifications <support@support.tag.bio>
+  TAGBIO_EMAIL_HOST: email-smtp.us-west-2.amazonaws.com
+  TAGBIO_EMAIL_PASSWORD: REPLACE
+  TAGBIO_EMAIL_PORT: '465'
+  TAGBIO_EMAIL_SECURE: 'true'
+  TAGBIO_EMAIL_USER: REPLACE
+---
+{{ include "tagbio.coreStackService" (dict "Chart" .Chart "firewall" "protected" "name" "notification-service" "storageVolume" true "Values" .Values ) }}
+
+{{ end }}

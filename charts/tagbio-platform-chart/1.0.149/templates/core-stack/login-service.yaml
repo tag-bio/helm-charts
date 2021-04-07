@@ -1,0 +1,177 @@
+{{- if .Values.tagbio.coreStack.enabled -}}
+
+---
+{{- if  (empty (lookup "v1" "Secret" .Values.tagbio.namespaces.app "login-service"))}}
+{{ include "tagbio.secretPreamble" (dict "name" "login-service" "namespace" .Values.tagbio.namespaces.app )}}
+  config.yml: |-
+    baseUrl: https://{{ .Values.tagbio.hosts.cluster }}/login-service
+    clients:
+      tagbio-login-client:
+        redirectUris:
+          - https://{{ .Values.tagbio.hosts.cluster }}/user
+        secret: {{ uuidv4 }}
+    cookies:
+      domain: {{ .Values.tagbio.hosts.cluster }}
+      httpOnly: true
+      maxAge: 3600000
+      sameSite: Lax
+      secure: false
+    tokenEncoding:
+      algorithm: RS256
+      expiresIn: 1h
+      issuer: https://{{ .Values.tagbio.hosts.cluster }}/login-service
+      keyid: tagbio-login-service
+    strategy:
+      name: initial-setup
+      options:
+        email: support@tag.bio
+    #strategy:
+    #  name: saml
+    #  options:
+    #    acceptedClockSkewMs: 0
+    #    #additionalParams:
+    #    #  add: to
+    #    #  each: request
+    #    #additionalAuthorizeParams:
+    #    #  add: to
+    #    #  each: request
+    #    #additionalLogoutParams:
+    #    #  add: to
+    #    #  each: request
+    #    #attributeConsumingServiceIndex: optional
+    #    #audience: optional
+    #    authnContext: urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport
+    #    authnRequestBinding: HTTP-REDIRECT # HTTP-POST HTTP-REDIRECT
+    #    callbackUrl: https://{{ .Values.tagbio.hosts.cluster }}/login-service/auth/callback
+    #    #decryptionCert: optional
+    #    #decryptionPvk: optional
+    #    disableRequestedAuthnContext: false # default false, true helps ADFS
+    #    emailField: nameID
+    #    entryPoint: ""
+    #    forceAuthn: false # force sign in each time
+    #    identifierFormat: urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress
+    #    issuer: https://{{ .Values.tagbio.hosts.cluster }}/login-service
+    #    #logoutUrl: optional # defaults to entryPoint
+    #    #metadataUrl: ''
+    #    #metadataXml: ''
+    # strategy:
+    #   name: oauth2
+    #   options:
+    #     authorizationURL: REPLACE
+    #     callbackURL: https://{{ .Values.tagbio.hosts.cluster }}/login-service/auth/callback
+    #     clientID: REPLACE
+    #     clientSecret: REPLACE
+    #     emailField: email
+    #     logoutURL: REPLACE
+    #     scope:
+    #       - openid
+    #       - email
+    #       - profile
+    #     tokenURL: REPLACE
+    #     userInfoURL: REPLACE
+    verifyOptions:
+      algorithms:
+        - RS256
+      clockTolerance: 60
+      issuer: https://{{ .Values.tagbio.hosts.cluster }}/login-service
+      maxAge: 1h
+
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    deployment.tag.bio/name: login-service
+    firewall.tag.bio/role: protected
+  name: login-service
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      deployment.tag.bio/name: login-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        deployment.tag.bio/name: login-service
+        deployment.tag.bio/helm-chart-version: {{ .Chart.Version }}
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: NotIn
+                values:
+                - "true"
+            weight: 100
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: DoesNotExist
+            weight: 99
+      containers:
+        - env:
+            - name: LOGIN_SERVICE_CONFIG_FILE
+              value: /config/config.yml
+            - name: LOGIN_SERVICE_PRIVATE_KEY
+              value: /storage/login-service/login-service.key
+          image: platform-registry.dev.tag.bio/login-service:{{ .Values.tagbio.imageTag }}
+          imagePullPolicy: IfNotPresent
+          name: login-service
+          resources:
+            requests:
+              cpu: 100m
+              memory: 500Mi
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+            - mountPath: /config/
+              name: config-yml
+            - mountPath: /storage
+              name: storage
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+        - name: tagbio-cluster-registry-creds
+      restartPolicy: Always
+      volumes:
+        - name: config-yml
+          secret:
+            defaultMode: 420
+            items:
+              - key: config.yml
+                path: config.yml
+            secretName: login-service
+        - name: storage
+          persistentVolumeClaim:
+            claimName: tagbio-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: login-service
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  clusterIP: None
+  ports:
+  - name: default
+    port: 42
+    protocol: TCP
+    targetPort: 42
+  selector:
+    deployment.tag.bio/name: login-service
+  sessionAffinity: None
+  type: ClusterIP
+
+{{ end }}
