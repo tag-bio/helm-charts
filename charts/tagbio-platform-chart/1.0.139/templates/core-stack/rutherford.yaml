@@ -1,0 +1,139 @@
+{{- if .Values.tagbio.coreStack.enabled -}}
+
+---
+{{ include "tagbio.secretPreamble" (dict "name" "rutherford" "namespace" .Values.tagbio.namespaces.app )}}
+  tagbio-environment.js: |-
+    window.TAGBIO_ENVIRONMENT = {
+      production: true,
+      history_flag: true,
+      tagadmin_flag: true,
+      site_provider: "kung",
+      authentication: "saml",
+      tagadmin: {
+        apiUrl: "https://{{ .Values.tagbio.hosts.cluster }}/admin-service"
+      },
+      history: 'kung',
+      gateway: 'https://{{ .Values.tagbio.hosts.cluster }}/',
+      firebase: {
+        apiKey: null,
+        authDomain: null,
+        databaseURL: null,
+        storageBucket: null,
+        projectId: null,
+        messagingSenderId: null
+      },
+      algolia: {
+        appId: "",
+        apiKey: "",
+      },
+      ga: null,
+      cognito: {
+        region: "{{ .Values.environment.aws.region }}",
+        userPoolId: "UNUSED",
+        userPoolWebClientId: "tagbio-login-client",
+        userPoolDomain: "https://{{ .Values.tagbio.hosts.cluster }}/rutherford",
+        mandatorySignIn: true,
+        IdentityPoolId: null,
+        login_provider: "{{ .Values.tagbio.hosts.cluster }}/rutherford",
+        saml:
+          "https://{{ .Values.tagbio.hosts.cluster }}/rutherford/auth/authorize?client_id=tagbio-login-client&redirect_uri=<YOUR_SITE_URL>&state=s&scope=openid+profile+email&response_type=token",
+        google_client_id: null
+      },
+      default_site: null
+    };
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    deployment.tag.bio/name: rutherford
+  name: rutherford
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      deployment.tag.bio/name: rutherford
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        deployment.tag.bio/name: rutherford
+        deployment.tag.bio/helm-chart-version: {{ .Chart.Version }}
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: NotIn
+                values:
+                - "true"
+            weight: 100
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: DoesNotExist
+            weight: 99
+      containers:
+        - env:
+            - name: LOGIN_SERVICE_CONFIG_FILE
+              value: /config/config.yml
+            - name: LOGIN_SERVICE_PRIVATE_KEY
+              value: /storage/rutherford/rutherford.key
+          image: platform-registry.dev.tag.bio/rutherford:{{ .Values.tagbio.imageTag }}
+          imagePullPolicy: IfNotPresent
+          name: rutherford
+          resources:
+            requests:
+              cpu: 100m
+              memory: 500Mi
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+            - mountPath: /usr/share/nginx/html/assets/config/
+              name: tagbio-environment
+      labels:
+        firewall.tag.bio/role: protected
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+        - name: tagbio-cluster-registry-creds
+      restartPolicy: Always
+      volumes:
+        - name: tagbio-environment
+          secret:
+            defaultMode: 420
+            items:
+              - key: tagbio-environment.js
+                path: tagbio-environment.js
+            secretName: rutherford
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rutherford
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  clusterIP: None
+  ports:
+  - name: default
+    port: 42
+    protocol: TCP
+    targetPort: 42
+  selector:
+    deployment.tag.bio/name: rutherford
+  sessionAffinity: None
+  type: ClusterIP
+
+{{ end }}
