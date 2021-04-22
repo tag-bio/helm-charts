@@ -1,0 +1,12 @@
+{{- if  (empty (lookup "v1" "Secret" .Values.tagbio.namespaces.app "tagbio-storage-azure-fileshare"))}}
+---
+
+{{ include "tagbio.secretPreamble" (dict "name" "tagbio-storage-azure-fileshare" "namespace" .Values.tagbio.namespaces.app )}}
+  aadClientId: {{ .Values.azure.aadClientId }}
+  aadClientSecret: {{ .Values.azure.aadClientSecret }}
+  azurestorageaccountkey: {{ .Values.azure.storageAccountKey }}
+  azurestorageaccountname: {{ .Values.azure.storageAccountName }}
+  subscriptionId: {{ .Values.azure.subscriptionId }}
+  tenantId: {{ .Values.azure.tenantId }}
+
+{{- end }}
