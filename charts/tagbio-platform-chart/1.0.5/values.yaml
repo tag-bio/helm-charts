@@ -15,8 +15,6 @@ jupyterhub:
     cookieSecret: "1c1269e8a73f90cc5420d73b86abb9aacf5f0d6ccc3c7c31b3bf9a0fba621a38"
     db:
       type: "sqlite-memory"
-  proxy:
-    secretToken: "1c1269e8a73f90cc5420d73b86abb9aacf5f0d6ccc3c7c31b3bf9a0fba621a38"
   ingress:
     enabled: true
     hosts:
@@ -25,5 +23,11 @@ jupyterhub:
       - hosts:
           - jupyter-aws-al2-200917.dev.tag.bio
         secretName: tagbio-cluster
+  proxy:
+    secretToken: "1c1269e8a73f90cc5420d73b86abb9aacf5f0d6ccc3c7c31b3bf9a0fba621a38"
+  singleuser:
+    storage:
+      dynamic:
+        storageClass: tagbio-nfs-path-storage
 
 
