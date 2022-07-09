@@ -1,0 +1,7 @@
+{{- if .Values.tagbio.storage.enabled }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.tagbio.namespaces.fc }}
+{{- end }}

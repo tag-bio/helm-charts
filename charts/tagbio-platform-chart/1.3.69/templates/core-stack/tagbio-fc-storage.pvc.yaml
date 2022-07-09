@@ -1,0 +1,11 @@
+{{- if .Values.tagbio.storage.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.tagbio.storage.name }}
+  namespace: {{ .Values.tagbio.namespaces.fc }}
+spec:
+  storageClassName: "" # Empty string must be explicitly set otherwise default StorageClass will be set
+  volumeName: {{ .Values.tagbio.storage.name }}
+{{- end }}
