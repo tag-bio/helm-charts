@@ -1,0 +1,32 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: periodic-redeploy
+  namespace: tagbio-system
+spec:
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            deployment.tag.bio/helm-chart-version: {{ .Chart.Version }}
+        spec:
+{{ include "tagbio.controllerAntiAffinity" . | indent 10 }}
+          containers:
+            - args:
+                - ./redeploy.js
+              env:
+                - name: REDEPLOY_WORKLOAD_FILTER
+                  value: fc-.*|rutherford|kung.*|login-service|notification-service
+              envFrom:
+                - secretRef:
+                    name: rancher-api
+                    optional: false
+              image: platform-registry.dev.tag.bio/tagbio-ci-pipeline:{{ .Values.tagbio.imageTag }}
+              imagePullPolicy: Always
+              name: periodic-redeploy
+          imagePullSecrets:
+            - name: tagbio-platform-registry-creds
+          restartPolicy: OnFailure
+  schedule: {{ .Values.tagbio.redeploySchedule }}
+  successfulJobsHistoryLimit: 7
