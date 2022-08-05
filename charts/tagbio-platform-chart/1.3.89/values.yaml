@@ -446,6 +446,3 @@ tagbio:
   site:
     adminEmail: support@tag.bio
     name: ""
-
-rancher:
-  projectId: ""
