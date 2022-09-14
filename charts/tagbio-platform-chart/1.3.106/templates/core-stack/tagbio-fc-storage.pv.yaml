@@ -1,0 +1,18 @@
+{{- if .Values.tagbio.storage.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.tagbio.storage.name }}
+  namespace: {{ .Values.tagbio.namespaces.fc }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  - ReadOnlyMany
+  - ReadWriteMany
+  capacity:
+    storage: {{ .Values.tagbio.storage.capacity }}
+  hostPath:
+    path: {{ .Values.tagbio.storage.path }}
+    type: DirectoryOrCreate
+{{- end }}
