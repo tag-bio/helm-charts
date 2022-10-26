@@ -1,0 +1,461 @@
+azure:
+  aadClientId: ''
+  aadClientSecret: ''
+  storageAccountKey: ''
+  storageAccountName: ''
+  subscriptionId: ''
+  tenantId: ''
+environment:
+  aws:
+    region: ''
+  azure:
+    fileshare:
+      name: 'tagbio-shared'
+    secret:
+      name: 'tagbio-storage-azure-fileshare'
+      namespace: 'tagbio-app'
+  nfs:
+    host: ''
+    path: /
+  efs:
+    fileSystemId: '' # Uses EFS CIS Driver
+  storageVolumeType: 'nfs'
+jupyterhub:
+  auth:
+    admin:
+      access: true
+      users:
+        - support@tag.bio
+    custom:
+      className: oauthenticator.generic.GenericOAuthenticator
+      config:
+        login_service: tag.bio
+        client_id: tagbio-login-client
+        client_secret: ""
+        token_url: ""
+        userdata_url: ""
+        userdata_method: GET
+        userdata_params: {'state': 'state'}
+        username_key: email
+    type: custom
+    whitelist:
+      users:
+        - support@tag.bio
+  hub:
+    cookieSecret: ""
+    db:
+      pvc:
+        selector:
+          matchLabels:
+            jupyter.tag.bio/name: tagbio-jupyter-hub-storage-pv
+      type: "sqlite-pvc"
+    extraConfig: 
+      00-allow-hidden: |
+        c.ContentsManager.allow_hidden = True
+      01-allow-larger-files: |
+        c.NotebookApp.tornado_settings = {"websocket_max_message_size": 1024 * 1024 * 1024 * 1024}  
+    extraEnv:
+      OAUTH2_AUTHORIZE_URL: ""
+      OAUTH2_TOKEN_URL: ""
+      OAUTH_CALLBACK_URL: ""
+    initContainers:
+      - command: ['sh', '-c', 'echo chowning; shopt -o dotglob; chown -vR jovyan:users /srv/jupyterhub']
+        image: jupyterhub/k8s-hub:0.10.6
+        imagePullPolicy: IfNotPresent
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: /srv/jupyterhub
+          name: hub-db-dir
+    labels:
+      firewall.tag.bio/role: gateway
+    networkPolicy:
+      enabled: false
+  imagePullSecrets:
+    - name: docker-hub-creds
+    - name: tagbio-cluster-registry-creds
+    - name: tagbio-platform-registry-creds
+  ingress:
+    enabled: true
+    hosts: []
+    tls:
+      - hosts: []
+        secretName: tagbio-cluster
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: 1g
+  proxy:
+    chp:
+      networkPolicy:
+        enabled: false
+    secretToken: ""
+    service:
+      type: ClusterIP
+  singleuser:
+    defaultUrl: "/lab"
+    extraAnnotations:
+      service-per-pod-label: 'tag.bio/jupyter-podname'
+      service-per-pod-ports: '8000:8000'
+    extraEnv:
+      TAGBIO_BASE_URL: http://kung.tagbio-app.svc.cluster.local:8000
+    extraLabels:
+      firewall.tag.bio/role: not-protected
+      hub.jupyter.org/network-access-hub: 'true'
+      io.cattle.field/appId: tagbio-platform
+      tag.bio/jupyter-podname: 'jupyter-{username}'
+      tag.bio/jupyter-username: '{username}'
+    extraNodeAffinity:
+      preferred:
+        - preference:
+            matchExpressions:
+            - key: tagbio-controller
+              operator: NotIn
+              values:
+              - "true"
+          weight: 100
+        - preference:
+            matchExpressions:
+            - key: tagbio-controller
+              operator: DoesNotExist
+          weight: 99
+    image:
+      name: platform-registry.dev.tag.bio/tagbio-notebook
+      pullPolicy: Always
+      tag: branch-master
+      # name: jupyter/datascience-notebook
+      # tag: 'lab-2.2.9'
+    initContainers:
+      - command: ['/usr/bin/bash', '-c', "echo copying and chowning; cp -nR /tagbio-notebook/tagbio-home-init/. /home/jovyan ; IFS=$'\n'; for file_name in $(find /home/jovyan/ -maxdepth 2); do chown -v jovyan:users \"$file_name\"; chmod -v go-rwx \"$file_name\"; done; conda init bash && conda activate tagbio; chmod g+w /opt/conda/envs/tagbio/lib/R/*"]
+        image: platform-registry.dev.tag.bio/tagbio-notebook:branch-master
+        imagePullPolicy: Always
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+          - mountPath: /home/jovyan
+            name: home
+            subPath: '{username}'
+    networkPolicy:
+      enabled: false
+    storage:
+      extraVolumes:
+        - name: jupyter-shared
+          persistentVolumeClaim:
+            claimName: tagbio-jupyter-users-shared-storage-pvc
+      extraVolumeMounts:
+        - mountPath: /home/jovyan/tagbio-jupyter-shared
+          name: jupyter-shared
+      static:
+        pvcName: tagbio-jupyter-users-storage-pvc
+        subPath: '{username}'
+      type: static
+tagbio:
+  coreStack:
+    enabled: true
+  gateway:
+    baseUrlExternal: https://cluster-host.domain
+    baseUrlInternal: http://kung.tagbio-app.svc.cluster.local
+  hosts:
+    cluster: ''
+    clusterManager: ''
+  imageTag: branch-master
+  namespaces:
+    app: tagbio-app
+    system: tagbio-system
+  publicFcs:
+    fc-catalyze:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: catalyze-data/archive.ser
+          groups: "false"
+          main: main.json
+          s3_bucket: tagbio-customer-data
+        jar: fc_s3_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      envFrom:
+      - secretRef:
+          name: tagbio-aws
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 16G
+    fc-celluloid:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-charlie:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 270
+      reservation:
+        memory: 16G
+    fc-darkside:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 1G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 1G
+    fc-ficus:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 120
+      reservation:
+        memory: 8G
+    fc-friday:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 8G 
+    fc-ferrum:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 10G
+    fc-gene:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 7G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 7G
+    fc-imvigor:
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 2G
+    fc-lifeline:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 2G
+    fc-metabric:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-multiplan:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-nct02684006-refined:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-topaz:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          protocols: protocols.txt
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 2G
+    fc-variant:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 600
+      reservation:
+        memory: 10G
+    fc-halleloo:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 4G
+    fc-charlie:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 270
+      reservation:
+        memory: 16G
+    fc-vip:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          groups: "false"
+          main: main.json
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 4G
+    fc-roy:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          sql_connection: "_connections/cluster_connection.json"
+          config: config/config.json
+          main: main.json
+        jar: fc_sql_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 4G
+  redeploySchedule: 0 10 * * *
+  site:
+    adminEmail: support@tag.bio
+    name: ""
