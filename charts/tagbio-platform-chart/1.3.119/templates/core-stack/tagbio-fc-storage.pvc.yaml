@@ -1,0 +1,20 @@
+{{- if .Values.tagbio.storage.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  # Must be a valid DNS subdomain name.
+  name: {{ .Values.tagbio.storage.name }}
+  namespace: {{ .Values.tagbio.namespaces.fc }}
+spec:
+  storageClassName: "" # Empty string must be explicitly set otherwise default StorageClass will be set
+  volumeName: {{ .Values.tagbio.storage.name }}
+  accessModes:
+  - ReadWriteOnce
+  - ReadOnlyMany
+  - ReadWriteMany
+  resources:
+    requests:
+      storage:
+        {{ .Values.tagbio.storage.capacity }}
+{{- end }}
