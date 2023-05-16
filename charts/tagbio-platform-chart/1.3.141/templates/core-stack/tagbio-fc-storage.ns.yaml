@@ -1,0 +1,9 @@
+{{- if .Values.tagbio.storage.enabled }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    field.cattle.io/projectId: {{ .Values.rancher.projectId }}
+  name: {{ .Values.tagbio.namespaces.fc }}
+{{- end }}
