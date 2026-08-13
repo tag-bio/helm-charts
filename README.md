@@ -72,6 +72,20 @@ Current patches (since 1.3.168), both backward-compatible with the old hub image
    stuck `Pending ... Insufficient memory` pods are unstuck by deleting the
    OLD pod of the same deployment.
 
+## Release prerequisites
+
+- **`release-2026-08-13`**: its `login-service` build only accepts HTTP Basic
+  credentials at the token endpoint (body credentials -> 401 -> callback 500).
+  Every environment taking this release MUST have
+  `jupyterhub.auth.custom.config.basic_auth: true` in its answers before/with
+  the upgrade. (Applied: CharacterBio, demo, IDEAYA, 2026-08-13.)
+- Release promotion gate: a real browser login on demo (through the
+  code-for-token exchange), not just the redirect curl - the redirect can be
+  healthy while the token exchange is broken.
+- Post-upgrade sweep: `kubectl get ds -n tagbio-system` - any
+  periodic-image-puller not matching the deployed chart version is an orphan
+  from a failed upgrade (Helm cannot see it) and must be deleted manually.
+
 ## Answers pitfalls (Rancher app YAML)
 
 - `hub.extraEnv` and `hub.extraConfig` must be **children of `jupyterhub.hub`**.
