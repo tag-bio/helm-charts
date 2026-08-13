@@ -19,7 +19,9 @@ charts/tagbio-platform-chart/<version>/
 
 1. `cp -r <latest> <new>` and bump `version:` in `<new>/Chart.yaml`.
 2. Make changes in the NEW directory only — published versions are immutable.
-3. Validate: `helm lint <new>` and
+3. Validate: `helm lint <new>` and — ALWAYS including a dotted release tag
+   (`--set tagbio.imageTag=release-2026.01.01`; a dotted tag once broke the
+   puller DaemonSet container names and failed the entire upgrade) —
    `helm template t <new> --set jupyterhub.proxy.secretToken=$(openssl rand -hex 32) --set jupyterhub.hub.cookieSecret=$(openssl rand -hex 32)`.
 4. Push to `master`; refresh the catalog in Rancher; upgrade apps per environment.
 5. **macOS gotcha**: when repacking the vendored tgz, use
@@ -47,6 +49,7 @@ Current patches (since 1.3.168), both backward-compatible with the old hub image
 | 1.3.167 | pre-2026-08 | Last legacy version (hub `k8s-hub:0.10.6` = JupyterHub 1.2.2) |
 | 1.3.168 | 2026-08-12 | Hub image → `jupyterhub/k8s-hub:3.3.8` (**JupyterHub 4.1.6**) + the two Python-3.11 shims. Required by tagbio-notebook images built from Aug 2026 (singleuser jupyterhub 5.x needs a scopes-aware hub; old hub 500s with `KeyError: 'scopes'`) |
 | 1.3.169 | 2026-08-12 | **Self-healing OAuth**: `hub.extraConfig.99-derive-oauth-urls` derives authorize/token/callback URLs from `auth.custom.config.token_url` and `ingress.hosts` whenever the `OAUTH2_*`/`OAUTH_CALLBACK_URL` env vars are absent. Motivated by repeated loss of `hub.extraEnv` answers in app upgrades (2026-08-07 and 2026-08-12, each causing site-down redirect loops). Explicit `extraEnv` still wins |
+| 1.3.173 | 2026-08-13 | **Fix: DNS-safe image-puller container names** (`. -> -`, trunc 63). Dotted image tags (e.g. `release-2026.08.13` via `tagbio.imageTag`) made the puller DaemonSet invalid and failed the whole app upgrade. First version safe for release-tag pinning |
 | 1.3.172 | 2026-08-13 | **Version bumps no longer roll FCs**: `helm-chart-version` label moved from the FC pod template to Deployment metadata. Upgrading TO 1.3.172 rolls FCs one last time; afterwards chart bumps are zero-churn for unchanged workloads (safe for demo/no-op versions) |
 | 1.3.171 | 2026-08-13 | **Image puller trimmed to active app images**: dropped build/CI-only images (`tagbio-fc-jars`, `tagbio-ci-builder`, `tagbio-ci-pipeline`) that no platform cluster runs but whose size caused a pull/GC disk tug-of-war; recycle interval now `tagbio.imagePullerIntervalSeconds` (default 3600s, was 900). `imagePullPolicy: Always` is kept deliberately — it downloads only when the registry digest changed, i.e. "only pull new images" |
 | 1.3.170 | 2026-08-13 | **Right-sized FC memory reservations** (`tagbio.publicFcs.*.reservation.memory`). Previously reservation ≡ JVM `Xmx` → ~95% node memory committed at ~50% real usage → surge rollouts (`maxSurge: 1, maxUnavailable: 0`) deadlocked with "Insufficient memory" (9 FCs stuck on demo). New values: max(observed peak × 1.2, 40% of Xmx), min 1G; unmeasured FCs 50% of Xmx; `fc-vip` *raised* 4G→7G (it was under-reserved). No limits are set, so runtime behavior is unchanged and `Xmx` still caps each heap |
