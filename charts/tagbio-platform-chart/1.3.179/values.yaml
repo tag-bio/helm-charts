@@ -1,0 +1,619 @@
+azure:
+  aadClientId: ''
+  aadClientSecret: ''
+  storageAccountKey: ''
+  storageAccountName: ''
+  subscriptionId: ''
+  tenantId: ''
+environment:
+  aws:
+    region: ''
+  azure:
+    fileshare:
+      name: 'tagbio-shared'
+    secret:
+      name: 'tagbio-storage-azure-fileshare'
+      namespace: 'tagbio-app'
+  nfs:
+    host: ''
+    path: /
+    # 1.3.175: optional prefix prepended to the three jupyter PV nfs paths.
+    # Needed where the NFS export root is not "/" (e.g. GCP Filestore-style
+    # exports: the share name must appear in the mount path, CharacterBio:
+    # /tagbio_storage). Default "" keeps the render identical to <=1.3.174
+    # for all existing environments. Do NOT reuse environment.nfs.path here.
+    pvPathPrefix: ''
+  efs:
+    fileSystemId: '' # Uses EFS CIS Driver
+  storageVolumeType: 'nfs'
+jupyterhub:
+  custom:
+    enforceWorkerScheduling: false
+  auth:
+    admin:
+      access: true
+      users:
+        - support@tag.bio
+    custom:
+      className: oauthenticator.generic.GenericOAuthenticator
+      config:
+        login_service: tag.bio
+        client_id: tagbio-login-client
+        client_secret: ""
+        token_url: ""
+        userdata_url: ""
+        userdata_method: GET
+        userdata_params: {'state': 'state'}
+        username_key: email
+    type: custom
+    whitelist:
+      users:
+        - support@tag.bio
+  hub:
+    # JupyterHub 4.1.6: required for the tagbio-notebook images built
+    # from Aug 2026 on (singleuser jupyterhub 5.x needs a scopes-aware
+    # hub; the chart's default 0.10.6 image runs JupyterHub 1.2.2).
+    image:
+      name: jupyterhub/k8s-hub
+      tag: "3.3.8"
+    cookieSecret: ""
+    db:
+      pvc:
+        selector:
+          matchLabels:
+            jupyter.tag.bio/name: tagbio-jupyter-hub-storage-pv
+      type: "sqlite-pvc"
+    extraConfig:
+      97-enforce-worker-scheduling: |
+        # Chart 1.3.174: keep user notebook pods off controller nodes.
+        # Gated by custom.enforceWorkerScheduling (set true in env answers
+        # together with tagbio.enforceWorkerScheduling). A user notebook
+        # once OOMed the controller; soft preference was not enough.
+        if get_config('custom.enforceWorkerScheduling', False):
+            _terms = list(get_config('singleuser.extraNodeAffinity.required', []) or [])
+            _terms.append({'matchExpressions': [
+                {'key': 'tagbio-controller', 'operator': 'NotIn', 'values': ['true']}]})
+            c.KubeSpawner.node_affinity_required = _terms
+            print('worker-only scheduling enforced for user notebook pods')
+      00-allow-hidden: |
+        c.ContentsManager.allow_hidden = True
+      01-allow-larger-files: |
+        c.NotebookApp.tornado_settings = {"websocket_max_message_size": 1024 * 1024 * 1024 * 1024}  
+      99-derive-oauth-urls: |
+        # Self-healing OAuth config: the OAUTH2_* env vars (hub.extraEnv) have
+        # repeatedly been lost in app-answer edits (2026-08-07 and 2026-08-12
+        # demo outages: empty authorize_url -> infinite redirect loop). All
+        # three URLs are derivable from values that live in the stable part of
+        # the answers, so derive any that are missing. extraEnv, when present,
+        # still wins because oauthenticator reads it first.
+        import os
+        try:
+            _tok = get_config('auth.custom.config.token_url', '') or os.environ.get('OAUTH2_TOKEN_URL', '')
+            if _tok:
+                if not os.environ.get('OAUTH2_TOKEN_URL'):
+                    c.GenericOAuthenticator.token_url = _tok
+                if not os.environ.get('OAUTH2_AUTHORIZE_URL'):
+                    c.GenericOAuthenticator.authorize_url = _tok.rsplit('/', 1)[0] + '/authorize'
+            _hosts = get_config('ingress.hosts', [])
+            if _hosts and not os.environ.get('OAUTH_CALLBACK_URL'):
+                c.GenericOAuthenticator.oauth_callback_url = 'https://' + _hosts[0] + '/hub/oauth_callback'
+            print('derive-oauth-urls: authorize/token/callback resolved')
+        except Exception as _e:
+            print('WARNING derive-oauth-urls skipped: %s' % _e)
+    extraEnv:
+      OAUTH2_AUTHORIZE_URL: ""
+      OAUTH2_TOKEN_URL: ""
+      OAUTH_CALLBACK_URL: ""
+    initContainers:
+      - command: ['sh', '-c', 'echo chowning; shopt -o dotglob; chown -vR jovyan:users /srv/jupyterhub']
+        image: jupyterhub/k8s-hub:0.10.6
+        imagePullPolicy: IfNotPresent
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: /srv/jupyterhub
+          name: hub-db-dir
+    labels:
+      firewall.tag.bio/role: gateway
+    networkPolicy:
+      enabled: false
+  imagePullSecrets:
+    - name: docker-hub-creds
+    - name: tagbio-cluster-registry-creds
+    - name: tagbio-platform-registry-creds
+  cull:
+    timeout: 172800 # --timeout
+  ingress:
+    enabled: true
+    hosts: []
+    tls:
+      - hosts: []
+        secretName: tagbio-cluster
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: 1g
+  proxy:
+    chp:
+      networkPolicy:
+        enabled: false
+    secretToken: ""
+    service:
+      type: ClusterIP
+  singleuser:
+    defaultUrl: "/lab"
+    extraAnnotations:
+      service-per-pod-label: 'tag.bio/jupyter-podname'
+      service-per-pod-ports: '8000:8000'
+    extraEnv:
+      EDITOR: "vim"
+      JUPYTERHUB_SERVICE_URL: http://0.0.0.0:8888/user/$(JUPYTERHUB_USER)/
+      TAGBIO_BASE_URL: http://kung.tagbio-app.svc.cluster.local:8000
+    extraLabels:
+      firewall.tag.bio/role: not-protected
+      hub.jupyter.org/network-access-hub: 'true'
+      io.cattle.field/appId: tagbio-platform
+      tag.bio/jupyter-podname: 'jupyter-{username}'
+      tag.bio/jupyter-username: '{username}'
+    extraNodeAffinity:
+      preferred:
+        - preference:
+            matchExpressions:
+            - key: tagbio-controller
+              operator: NotIn
+              values:
+              - "true"
+          weight: 100
+        - preference:
+            matchExpressions:
+            - key: tagbio-controller
+              operator: DoesNotExist
+          weight: 99
+    image:
+      name: platform-registry.dev.tag.bio/tagbio-notebook
+      pullPolicy: Always
+      tag: branch-master
+      # name: jupyter/datascience-notebook
+      # tag: 'lab-2.2.9'
+    initContainers:
+      - command: ['/usr/bin/bash', '-c', "echo copying and chowning; cp -nR /tagbio-notebook/tagbio-home-init/. /home/jovyan ; IFS=$'\n'; for file_name in $(find /home/jovyan/ -maxdepth 2); do chown -v jovyan:users \"$file_name\"; chmod -v go-rwx \"$file_name\"; done; "]
+        image: platform-registry.dev.tag.bio/tagbio-notebook:branch-master
+        imagePullPolicy: Always
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+          - mountPath: /home/jovyan
+            name: home
+            subPath: '{username}'
+    networkPolicy:
+      enabled: false
+    storage:
+      extraVolumes:
+        - name: jupyter-shared
+          persistentVolumeClaim:
+            claimName: tagbio-jupyter-users-shared-storage-pvc
+      extraVolumeMounts:
+        - mountPath: /home/jovyan/tagbio-jupyter-shared
+          name: jupyter-shared
+      static:
+        pvcName: tagbio-jupyter-users-storage-pvc
+        subPath: '{username}'
+      type: static
+tagbio:
+  coreStack:
+    enabled: true
+  gateway:
+    baseUrlExternal: https://cluster-host.domain
+    baseUrlInternal: http://kung.tagbio-app.svc.cluster.local
+  hosts:
+    cluster: ''
+    clusterManager: ''
+  imageTag: branch-master
+  # Seconds between image-puller recycles (each recycle re-checks the
+  # registry digest and downloads only if the image changed)
+  imagePullerIntervalSeconds: 3600
+  # When true, FC pods (and via jupyterhub.custom.enforceWorkerScheduling,
+  # hub/proxy and user notebook pods) are HARD-excluded from nodes labeled
+  # tagbio-controller=true. Default false = legacy soft preference only.
+  # Enable per environment AFTER confirming it has non-controller worker
+  # nodes, or those pods become unschedulable.
+  enforceWorkerScheduling: false
+  namespaces:
+    app: tagbio-app
+    system: tagbio-system
+  publicFcs:
+    fc-buzz:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-catalyze:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    fc-cbio-tcga:
+      # CI publishes only fc-cbio-tcga:branch-master, so this FC pins its own tag
+      # rather than following a release-pinned tagbio.imageTag.
+      imageTag: branch-master
+      enabled: false
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest that carries a data_model: with no command
+          # the engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest.json
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    fc-celluloid:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 2G
+    fc-charlie:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 6G
+    fc-darkside:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 1G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 1G
+    fc-epic:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 5G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-faers:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.yaml
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 8G
+    fc-friday:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G 
+    fc-clinvar: 
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser 
+          main: main.json
+          groups: "false"
+          r_sdk: "$TAGBIO_R_UTILS"
+          python_sdk: "$TAGBIO_PY"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 16G 
+      livenessProbe:
+        initialDelaySeconds: 300
+        path: '/s'
+        periodSeconds: 60
+        port: 8000
+      reservation:
+        cpu: 100m
+        memory: 16G 
+      timeoutSeconds: 3000
+    fc-gene:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 7G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-global:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 5G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 2G
+    fc-halleloo:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 2G
+    fc-imvigor:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 1G
+    fc-iris:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          config: config/config.json
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 1G
+    fc-mcduck:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 6G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-metabric:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-mordecai:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 1G
+    fc-nct02684006-refined:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-relevant:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-roy:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          sql_connection: "_connections/cluster_connection.json"
+          config: config/config.json
+          main: main.json
+        jar: fc_sql_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 2G
+    fc-rutherford-test:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    fc-variant:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 600
+      reservation:
+        memory: 10G
+    fc-vip:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 7G
+  redeploySchedule: 0 10 * * *
+  site:
+    adminEmail: support@tag.bio
+    name: ""
