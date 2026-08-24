@@ -1,0 +1,17 @@
+apiVersion: v2
+dependencies:
+  - name: jupyterhub
+    namespace: jupyterhub
+    repository: https://jupyterhub.github.io/helm-chart
+    version: 0.10.6
+description: Installs infrastructure and dependency Helm charts for tagbio platform.
+home: https://bitbucket.org/cloudfolks/tagbio-platform-chart
+icon: https://live-tagbio.pantheonsite.io/wp-content/uploads/2019/09/tagbio.png
+keywords:
+  - jupyter
+  - platform
+  - tagbio
+name: tagbio-platform
+sources:
+  - https://bitbucket.org/cloudfolks/tagbio-platform-chart
+version: 1.3.186

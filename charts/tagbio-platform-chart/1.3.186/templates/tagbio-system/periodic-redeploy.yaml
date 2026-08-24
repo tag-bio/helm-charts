@@ -1,0 +1,40 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: periodic-redeploy
+  namespace: tagbio-system
+spec:
+  jobTemplate:
+    spec:
+      # 1.3.180: a healthy run takes ~20s. A run that hangs (image pull, registry
+      # outage, wedged node) is killed after an hour so that, with
+      # concurrencyPolicy Forbid, it cannot block every later schedule tick.
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            deployment.tag.bio/helm-chart-version: {{ .Chart.Version }}
+        spec:
+{{ include "tagbio.controllerAntiAffinity" . | indent 10 }}
+          containers:
+            - args:
+                - ./redeploy.js
+              env:
+                - name: REDEPLOY_WORKLOAD_FILTER
+                  value: fc-.*|rutherford|kung.*|login-service|notification-service
+              envFrom:
+                - secretRef:
+                    name: rancher-api
+                    optional: false
+              image: platform-registry.dev.tag.bio/tagbio-ci-pipeline:{{ .Values.tagbio.redeploy.imageTag | default .Values.tagbio.imageTag }}
+              imagePullPolicy: Always
+              name: periodic-redeploy
+          imagePullSecrets:
+            - name: tagbio-platform-registry-creds
+          restartPolicy: OnFailure
+  schedule: {{ .Values.tagbio.redeploySchedule | quote }}
+  # 1.3.180: a run that cannot start (e.g. image pull failure) must not pile up
+  # one stuck Active job per schedule tick.
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 7
