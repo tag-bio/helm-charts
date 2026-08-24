@@ -1,0 +1,154 @@
+{{ range $name, $spec := .Values.tagbio.publicFcs }}
+{{- if $spec.enabled -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: tagbio-app
+  labels:
+    deployment.tag.bio/name: {{ $name }}
+    deployment.tag.bio/helm-chart-version: {{ $.Chart.Version | quote }}
+spec:
+  selector:
+    matchLabels:
+      deployment.tag.bio/name: {{ $name }}
+  progressDeadlineSeconds: 3600
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        deployment.tag.bio/name: {{ $name }}
+        {{- /* NOTE: no chart-version label here on purpose (moved out in
+               1.3.172). Putting Chart.Version in the POD template forced
+               every FC to roll on every chart version bump even when
+               nothing about the FCs changed. The Deployment metadata
+               label below still records the chart version. */}}
+    spec:
+{{ include "tagbio.controllerAntiAffinity" $ | indent 6 }}
+{{- if $spec.archiveSync }}
+      {{- /* archiveSync: pull this FC's data archive from the registry before it starts.
+
+             The archive is an OCI ARTIFACT, pushed by the product repo's CI, so data
+             travels the same rails as the image: one registry, one credential, caching
+             and mirroring already solved. The alternative -- a public S3 bucket -- would
+             need a policy on a bucket that also holds customer data, and requester-pays
+             is not an option because fc_s3_server has no request-payer support.
+
+             Idempotent by digest: if the file is already on the volume with the expected
+             sha256, nothing is pulled. Pod restarts and helm upgrades are therefore cheap;
+             only a new digest costs a download. */}}
+      initContainers:
+        - name: archive-sync
+          image: {{ $spec.archiveSync.image | default "ghcr.io/oras-project/oras:v1.2.0" }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              DEST="{{ $spec.archiveSync.dest }}"
+              REF="{{ $spec.archiveSync.ref }}"
+              WANT="{{ $spec.archiveSync.sha256 | default "" }}"
+              mkdir -p "$(dirname "$DEST")"
+              if [ -f "$DEST" ] && [ -n "$WANT" ]; then
+                HAVE=$(sha256sum "$DEST" | awk '{print $1}')
+                if [ "$HAVE" = "$WANT" ]; then
+                  echo "archive already present and matches $WANT"; exit 0
+                fi
+                echo "archive present but hashes to $HAVE, expected $WANT -- refetching"
+              fi
+              cd "$(dirname "$DEST")"
+              if [ -n "${TAGBIO_PLATFORM_REGISTRY_USER:-}" ]; then
+                echo "$TAGBIO_PLATFORM_REGISTRY_PASSWORD" \
+                  | oras login "${REF%%/*}" \
+                      --username "$TAGBIO_PLATFORM_REGISTRY_USER" --password-stdin
+              fi
+              oras pull "$REF" --output .
+              if [ -n "$WANT" ]; then
+                HAVE=$(sha256sum "$DEST" | awk '{print $1}')
+                [ "$HAVE" = "$WANT" ] || { echo "pulled archive hashes to $HAVE, expected $WANT" >&2; exit 1; }
+              fi
+              echo "archive ready at $DEST"
+          envFrom:
+            # Same variable names the CI pipeline uses:
+            # TAGBIO_PLATFORM_REGISTRY_USER / TAGBIO_PLATFORM_REGISTRY_PASSWORD.
+            # The secret holding them is configurable because the deploy namespace may
+            # name it differently from CI's; oras cannot read a dockerconfigjson
+            # imagePullSecret, so this must be an ENV-style secret.
+            - secretRef:
+                name: {{ $spec.archiveSync.credentialsSecret | default "tagbio-platform-registry" }}
+                optional: true
+          volumeMounts:
+            - mountPath: /storage
+              name: storage
+{{- end }}
+      containers:
+        - args:
+            - java {{ range $key, $val := $spec.fcCommand.javaArgs }} -{{ $key }}{{ $val }}  {{ end }} -jar $TAGBIO_JARS/{{ $spec.fcCommand.jar }} {{ range $key, $val := $spec.fcCommand.fcArgs }} {{ $key }}={{ $val }} {{ end }} cache_dir=/storage/blobs/{{ $name }} cache_salt=$(cat $TAGBIO_FC_DIR/VERSION.txt) commit=$(cat $TAGBIO_FC_DIR/VERSION.txt) process_count=$(nproc) python_sdk=$TAGBIO_PY r_sdk=$TAGBIO_R_UTILS
+          envFrom:
+            - secretRef:
+                name: tagbio-aws
+          image: platform-registry.dev.tag.bio/{{ $name }}:{{ $spec.imageTag | default $.Values.tagbio.imageTag }}
+          imagePullPolicy: Always
+          livenessProbe:
+            failureThreshold: 2
+            initialDelaySeconds: {{ $spec.livenessProbe.initialDelaySeconds }}
+            periodSeconds: 15
+            successThreshold: 1
+            tcpSocket:
+              port: 8000
+            timeoutSeconds: 5
+          name: {{ $name }}
+          readinessProbe:
+            failureThreshold: 2
+            initialDelaySeconds: {{ $spec.livenessProbe.initialDelaySeconds }}
+            periodSeconds: 15
+            successThreshold: 1
+            tcpSocket:
+              port: 8000
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: {{ if $spec.reservation.cpu -}}{{ $spec.reservation.cpu }}{{- else -}}100m{{- end }}
+              memory: {{ if $spec.reservation.memory -}}{{ $spec.reservation.memory }}{{- else -}}1G{{- end }}
+          volumeMounts:
+            - mountPath: /storage
+              name: storage
+{{- if $spec.workingDir }}
+          workingDir: {{ $spec.workingDir }}
+{{- end }}
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+        - name: tagbio-cluster-registry-creds
+        - name: docker-hub-creds
+      restartPolicy: Always
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: tagbio-storage
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: tagbio-app
+spec:
+  clusterIP: None
+  ports:
+  - name: default
+    port: 42
+    protocol: TCP
+    targetPort: 42
+  selector:
+    deployment.tag.bio/name: {{ $name }}
+  sessionAffinity: None
+  type: ClusterIP
+
+{{- end }}
+{{ end }}
