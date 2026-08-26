@@ -46,6 +46,7 @@ Current patches (since 1.3.168), both backward-compatible with the old hub image
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.3.190 | 2026-08-26 | **`tagbio.rutherford.imageTag`** (default `""` = follow `tagbio.imageTag`): per-component tag for the frontend, used by both the rutherford Deployment and its `periodic-image-puller` container. Same pattern as `redeploy.imageTag` (1.3.180) / `publicFcs.*.imageTag` (1.3.177): rutherford ships only `branch-*` tags, so a release-pinned environment could not take a frontend-only fix. Unset → byte-identical to 1.3.189. Applied on demo (`branch-master`, for the 1.1.3 version/copyright fix) |
 | 1.3.167 | pre-2026-08 | Last legacy version (hub `k8s-hub:0.10.6` = JupyterHub 1.2.2) |
 | 1.3.168 | 2026-08-12 | Hub image → `jupyterhub/k8s-hub:3.3.8` (**JupyterHub 4.1.6**) + the two Python-3.11 shims. Required by tagbio-notebook images built from Aug 2026 (singleuser jupyterhub 5.x needs a scopes-aware hub; old hub 500s with `KeyError: 'scopes'`) |
 | 1.3.169 | 2026-08-12 | **Self-healing OAuth**: `hub.extraConfig.99-derive-oauth-urls` derives authorize/token/callback URLs from `auth.custom.config.token_url` and `ingress.hosts` whenever the `OAUTH2_*`/`OAUTH_CALLBACK_URL` env vars are absent. Motivated by repeated loss of `hub.extraEnv` answers in app upgrades (2026-08-07 and 2026-08-12, each causing site-down redirect loops). Explicit `extraEnv` still wins |
