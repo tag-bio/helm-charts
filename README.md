@@ -46,6 +46,7 @@ Current patches (since 1.3.168), both backward-compatible with the old hub image
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.3.191 | 2026-08-26 | **Image puller honours `publicFcs.*.imageName`** (`$spec.imageName \| default $name`, as `public-fcs.yaml` already did since 1.3.186). Before, the six `fc-cbioportal-*` puller containers tried to pull nonexistent `fc-cbioportal-<product>` repos → `ImagePullBackOff` in the puller pod and the Rancher app stuck at "deploying". No `imageName` set → byte-identical to 1.3.190 |
 | 1.3.190 | 2026-08-26 | **`tagbio.rutherford.imageTag`** (default `""` = follow `tagbio.imageTag`): per-component tag for the frontend, used by both the rutherford Deployment and its `periodic-image-puller` container. Same pattern as `redeploy.imageTag` (1.3.180) / `publicFcs.*.imageTag` (1.3.177): rutherford ships only `branch-*` tags, so a release-pinned environment could not take a frontend-only fix. Unset → byte-identical to 1.3.189. Applied on demo (`branch-master`, for the 1.1.3 version/copyright fix) |
 | 1.3.167 | pre-2026-08 | Last legacy version (hub `k8s-hub:0.10.6` = JupyterHub 1.2.2) |
 | 1.3.168 | 2026-08-12 | Hub image → `jupyterhub/k8s-hub:3.3.8` (**JupyterHub 4.1.6**) + the two Python-3.11 shims. Required by tagbio-notebook images built from Aug 2026 (singleuser jupyterhub 5.x needs a scopes-aware hub; old hub 500s with `KeyError: 'scopes'`) |
