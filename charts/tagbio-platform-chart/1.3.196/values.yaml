@@ -1,0 +1,970 @@
+azure:
+  aadClientId: ''
+  aadClientSecret: ''
+  storageAccountKey: ''
+  storageAccountName: ''
+  subscriptionId: ''
+  tenantId: ''
+environment:
+  aws:
+    region: ''
+  azure:
+    fileshare:
+      name: 'tagbio-shared'
+    secret:
+      name: 'tagbio-storage-azure-fileshare'
+      namespace: 'tagbio-app'
+  nfs:
+    host: ''
+    path: /
+    # 1.3.175: optional prefix prepended to the three jupyter PV nfs paths.
+    # Needed where the NFS export root is not "/" (e.g. GCP Filestore-style
+    # exports: the share name must appear in the mount path, CharacterBio:
+    # /tagbio_storage). Default "" keeps the render identical to <=1.3.174
+    # for all existing environments. Do NOT reuse environment.nfs.path here.
+    pvPathPrefix: ''
+  efs:
+    fileSystemId: '' # Uses EFS CIS Driver
+  storageVolumeType: 'nfs'
+jupyterhub:
+  custom:
+    enforceWorkerScheduling: false
+  auth:
+    admin:
+      access: true
+      users:
+        - support@tag.bio
+    custom:
+      className: oauthenticator.generic.GenericOAuthenticator
+      config:
+        login_service: tag.bio
+        client_id: tagbio-login-client
+        client_secret: ""
+        token_url: ""
+        userdata_url: ""
+        userdata_method: GET
+        userdata_params: {'state': 'state'}
+        username_key: email
+    type: custom
+    whitelist:
+      users:
+        - support@tag.bio
+  hub:
+    # JupyterHub 4.1.6: required for the tagbio-notebook images built
+    # from Aug 2026 on (singleuser jupyterhub 5.x needs a scopes-aware
+    # hub; the chart's default 0.10.6 image runs JupyterHub 1.2.2).
+    image:
+      name: jupyterhub/k8s-hub
+      tag: "3.3.8"
+    cookieSecret: ""
+    db:
+      pvc:
+        selector:
+          matchLabels:
+            jupyter.tag.bio/name: tagbio-jupyter-hub-storage-pv
+      type: "sqlite-pvc"
+    extraConfig:
+      97-enforce-worker-scheduling: |
+        # Chart 1.3.174: keep user notebook pods off controller nodes.
+        # Gated by custom.enforceWorkerScheduling (set true in env answers
+        # together with tagbio.enforceWorkerScheduling). A user notebook
+        # once OOMed the controller; soft preference was not enough.
+        if get_config('custom.enforceWorkerScheduling', False):
+            _terms = list(get_config('singleuser.extraNodeAffinity.required', []) or [])
+            _terms.append({'matchExpressions': [
+                {'key': 'tagbio-controller', 'operator': 'NotIn', 'values': ['true']}]})
+            c.KubeSpawner.node_affinity_required = _terms
+            print('worker-only scheduling enforced for user notebook pods')
+      00-allow-hidden: |
+        c.ContentsManager.allow_hidden = True
+      01-allow-larger-files: |
+        c.NotebookApp.tornado_settings = {"websocket_max_message_size": 1024 * 1024 * 1024 * 1024}  
+      99-derive-oauth-urls: |
+        # Self-healing OAuth config: the OAUTH2_* env vars (hub.extraEnv) have
+        # repeatedly been lost in app-answer edits (2026-08-07 and 2026-08-12
+        # demo outages: empty authorize_url -> infinite redirect loop). All
+        # three URLs are derivable from values that live in the stable part of
+        # the answers, so derive any that are missing. extraEnv, when present,
+        # still wins because oauthenticator reads it first.
+        import os
+        try:
+            _tok = get_config('auth.custom.config.token_url', '') or os.environ.get('OAUTH2_TOKEN_URL', '')
+            if _tok:
+                if not os.environ.get('OAUTH2_TOKEN_URL'):
+                    c.GenericOAuthenticator.token_url = _tok
+                if not os.environ.get('OAUTH2_AUTHORIZE_URL'):
+                    c.GenericOAuthenticator.authorize_url = _tok.rsplit('/', 1)[0] + '/authorize'
+            _hosts = get_config('ingress.hosts', [])
+            if _hosts and not os.environ.get('OAUTH_CALLBACK_URL'):
+                c.GenericOAuthenticator.oauth_callback_url = 'https://' + _hosts[0] + '/hub/oauth_callback'
+            print('derive-oauth-urls: authorize/token/callback resolved')
+        except Exception as _e:
+            print('WARNING derive-oauth-urls skipped: %s' % _e)
+    extraEnv:
+      OAUTH2_AUTHORIZE_URL: ""
+      OAUTH2_TOKEN_URL: ""
+      OAUTH_CALLBACK_URL: ""
+    initContainers:
+      - command: ['sh', '-c', 'echo chowning; shopt -o dotglob; chown -vR jovyan:users /srv/jupyterhub']
+        image: jupyterhub/k8s-hub:0.10.6
+        imagePullPolicy: IfNotPresent
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: /srv/jupyterhub
+          name: hub-db-dir
+    labels:
+      firewall.tag.bio/role: gateway
+    networkPolicy:
+      enabled: false
+  imagePullSecrets:
+    - name: docker-hub-creds
+    - name: tagbio-cluster-registry-creds
+    - name: tagbio-platform-registry-creds
+  cull:
+    timeout: 172800 # --timeout
+  ingress:
+    enabled: true
+    hosts: []
+    tls:
+      - hosts: []
+        secretName: tagbio-cluster
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: 1g
+  proxy:
+    chp:
+      networkPolicy:
+        enabled: false
+    secretToken: ""
+    service:
+      type: ClusterIP
+  singleuser:
+    defaultUrl: "/lab"
+    extraAnnotations:
+      service-per-pod-label: 'tag.bio/jupyter-podname'
+      service-per-pod-ports: '8000:8000'
+    extraEnv:
+      EDITOR: "vim"
+      JUPYTERHUB_SERVICE_URL: http://0.0.0.0:8888/user/$(JUPYTERHUB_USER)/
+      TAGBIO_BASE_URL: http://kung.tagbio-app.svc.cluster.local:8000
+    extraLabels:
+      firewall.tag.bio/role: not-protected
+      hub.jupyter.org/network-access-hub: 'true'
+      io.cattle.field/appId: tagbio-platform
+      tag.bio/jupyter-podname: 'jupyter-{username}'
+      tag.bio/jupyter-username: '{username}'
+    extraNodeAffinity:
+      preferred:
+        - preference:
+            matchExpressions:
+            - key: tagbio-controller
+              operator: NotIn
+              values:
+              - "true"
+          weight: 100
+        - preference:
+            matchExpressions:
+            - key: tagbio-controller
+              operator: DoesNotExist
+          weight: 99
+    image:
+      name: platform-registry.dev.tag.bio/tagbio-notebook
+      pullPolicy: Always
+      tag: branch-master
+      # name: jupyter/datascience-notebook
+      # tag: 'lab-2.2.9'
+    initContainers:
+      - command: ['/usr/bin/bash', '-c', "echo copying and chowning; cp -nR /tagbio-notebook/tagbio-home-init/. /home/jovyan ; IFS=$'\n'; for file_name in $(find /home/jovyan/ -maxdepth 2); do chown -v jovyan:users \"$file_name\"; chmod -v go-rwx \"$file_name\"; done; "]
+        image: platform-registry.dev.tag.bio/tagbio-notebook:branch-master
+        imagePullPolicy: Always
+        name: chown
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsGroup: 0
+          runAsUser: 0
+        volumeMounts:
+          - mountPath: /home/jovyan
+            name: home
+            subPath: '{username}'
+    networkPolicy:
+      enabled: false
+    storage:
+      extraVolumes:
+        - name: jupyter-shared
+          persistentVolumeClaim:
+            claimName: tagbio-jupyter-users-shared-storage-pvc
+      extraVolumeMounts:
+        - mountPath: /home/jovyan/tagbio-jupyter-shared
+          name: jupyter-shared
+      static:
+        pvcName: tagbio-jupyter-users-storage-pvc
+        subPath: '{username}'
+      type: static
+tagbio:
+  coreStack:
+    enabled: true
+    # Chart 1.3.188 (opt-in, default off = render-identical to 1.3.187):
+    # prefer scheduling the core stack (kung, kung-services, login-service,
+    # notification-service, rutherford) onto a dedicated long-lived node
+    # labeled <labelKey>=<labelValue>, and tolerate a NoSchedule taint with
+    # the same key/value on it. Preferred, not required: if that node is
+    # absent the pods fall back to any worker exactly as before. Use this
+    # in environments whose workers are spot instances, so a reclaim only
+    # takes down FCs/notebooks and never the login/API path.
+    # hub/proxy: label the node hub.jupyter.org/node-purpose=core (the
+    # bundled jupyterhub chart already prefers it) and add the toleration
+    # via jupyterhub.hub.tolerations + jupyterhub.proxy.chp.tolerations.
+    stableNode:
+      enabled: false
+      labelKey: tagbio-stable
+      labelValue: "true"
+      tolerate: true
+      # 1.3.189: when true, the affinity is requiredDuringScheduling (hard
+      # pin) instead of preferred. A preferred term is only one vote next to
+      # the scheduler's resource/image-locality scoring and an empty large
+      # worker can outscore the stable node. With required=true, pick a label
+      # the node carries automatically (e.g. labelKey
+      # node.kubernetes.io/instance-type, labelValue r6i.xlarge) so a
+      # replacement instance is matched without manual labeling; otherwise
+      # the core stack stays Pending until the label is re-applied.
+      required: false
+      # 1.3.189: taint key/value to tolerate; default = labelKey/labelValue
+      # (1.3.188 behaviour). Set these when the label used for affinity is
+      # not the taint key (e.g. affinity on instance-type, taint tagbio-stable).
+      taintKey: ""
+      taintValue: ""
+  gateway:
+    baseUrlExternal: https://cluster-host.domain
+    baseUrlInternal: http://kung.tagbio-app.svc.cluster.local
+  hosts:
+    cluster: ''
+    clusterManager: ''
+  imageTag: branch-master
+  rutherford:
+    # 1.3.190: per-component tag override for the frontend (same pattern as
+    # tagbio.redeploy.imageTag / publicFcs.*.imageTag). Empty (default) follows
+    # tagbio.imageTag exactly as before. Set it on an environment pinned to a
+    # release tag that needs a newer rutherford alone (rutherford's pipeline
+    # publishes only branch-<name> tags; release-* tags are cut platform-wide).
+    # The image puller follows the same value so it never backs off.
+    imageTag: ""
+  # 1.3.192 (tag fixed in 1.3.193): optional tagbio-mcp -- the remote MCP server that lets Claude (Code /
+  # Desktop; claude.ai in a later version) list, describe, query and chart this
+  # site's data products under the caller's own Tag.bio API key. Default off =
+  # render-identical to 1.3.191. When enabled it adds a Deployment, a headless
+  # Service and an Ingress rule for <path> on hosts.cluster (its own Ingress
+  # object; ingress-nginx routes the longer path ahead of platform-gateway's "/").
+  # It holds no credentials: every request's Authorization header is forwarded to
+  # kung, which stays the only authenticator. The image is published only as
+  # branch-<name> (like rutherford), so it never follows tagbio.imageTag.
+  # redeploy.js in the CI pipeline only restarts an EXISTING workload: enable this
+  # BEFORE expecting the tagbio-mcp pipeline's deploy stage to do anything.
+  mcp:
+    enabled: false
+    image:
+      repository: platform-registry.dev.tag.bio/tagbio-mcp
+      tag: branch-master
+    path: /mcp
+    replicas: 1
+    # kung base URL the server dials; default <gateway.baseUrlInternal>:8000
+    kungUrl: ""
+    # synchronous query deadline; AWS installs sit behind a 60s ALB idle timeout
+    queryDeadlineSeconds: 50
+    chartPng: true
+    logLevel: info
+    # contact shown in scale-refusal messages; enterprise installs set their own
+    supportContact: support@tag.bio
+    resources:
+      requests:
+        cpu: 100m
+        memory: 1Gi
+      limits:
+        memory: 4Gi
+    caps:
+      maxUnfilteredEntities: 0   # 0 = entity cap off; maxCells/deadline/inline caps still govern
+      maxCells: 24000000   # ~35s to generate at full width; the 50s deadline is the real bound
+      maxSelectCollections: 50
+      maxDownloadBytes: 67108864
+      maxInlineRows: 2000
+      maxInlineBytes: 1048576
+  # Seconds between image-puller recycles (each recycle re-checks the
+  # registry digest and downloads only if the image changed)
+  imagePullerIntervalSeconds: 3600
+  # When true, FC pods (and via jupyterhub.custom.enforceWorkerScheduling,
+  # hub/proxy and user notebook pods) are HARD-excluded from nodes labeled
+  # tagbio-controller=true. Default false = legacy soft preference only.
+  # Enable per environment AFTER confirming it has non-controller worker
+  # nodes, or those pods become unschedulable.
+  enforceWorkerScheduling: false
+  namespaces:
+    app: tagbio-app
+    system: tagbio-system
+  publicFcs:
+    fc-buzz:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-catalyze:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    # DEPRECATED, kept so an upgrade does not DELETE a running workload. 1.3.181
+    # dropped this key outright, which would have removed the deployed fc-cbio-tcga on
+    # the next `helm upgrade` -- the chart renders workloads from this map, so deleting a
+    # key deletes the Deployment. fc-cbioportal-tcga supersedes it (same 32 cohorts, same
+    # 10,967 samples, plus 4 apps and the aneuploidy fix). Retire this one deliberately
+    # once the replacement is verified on demo: set enabled: false in the environment
+    # answers first, confirm, then remove the key in a later chart version.
+    fc-cbio-tcga:
+      imageTag: branch-master
+      enabled: false
+      fcCommand:
+        fcArgs:
+          command: run_server
+          manifest: manifest.json
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+
+    # TROPiCS-02 (Gilead study 573-13209): the randomised phase 3 trial of sacituzumab
+    # govitecan in HR+/HER2- metastatic breast cancer, with its multi-omic biomarker
+    # package. 578 subjects at SUBJECT grain -- a trial, so the patient is the unit of
+    # randomisation and of every endpoint.
+    #
+    # ANONYMISED PATIENT-LEVEL TRIAL DATA, not public data. It is listed here because
+    # publicFcs is simply the chart's FC map -- every entry defaults to enabled: false and
+    # an environment opts in. Only demo and gilead should set this true. The archive stays
+    # unreachable regardless: it is pulled from a private registry repo with credentials
+    # the environment must hold.
+    #
+    # Its archive lives under its own S3 prefix (gilead-tropics-data) and its own registry
+    # repo (fc-archives/gilead/tropics-02), separate from the cBioPortal archives, so
+    # access can be granted per prefix rather than per bucket.
+    fc-gilead-tropics-02:
+      # CI publishes only branch-master for this repo, so pin rather than follow a
+      # release-wide tagbio.imageTag.
+      imageTag: branch-master
+      enabled: false
+      archiveSync:
+        ref: platform-registry.dev.tag.bio/fc-archives/gilead/tropics-02:latest
+        dest: /storage/data/gilead-tropics-data/archive.ser
+        # Pin a digest to make a deployment reproducible; empty takes :latest.
+        sha256: ""
+        # Secret with username/password keys in the DEPLOY namespace. See the archiveSync
+        # notes in the template -- oras cannot read a dockerconfigjson imagePullSecret.
+        credentialsSecret: tagbio-ci-docker
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest carrying a data_model: with no command the
+          # engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest.json
+          archive: /storage/data/gilead-tropics-data/archive.ser
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          run_tests: "true"
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          # 578 entities -- three orders of magnitude smaller than the cBioPortal
+          # products, and measured well under 1 GB peak while un-archiving.
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 2G
+
+    # The six cbioportal products: one image, one workload each, selected by manifest.
+    # Archives are NOT baked in -- archiveSync pulls each as an OCI artifact from the
+    # registry into /storage before the FC starts, and  on the command line
+    # overrides whatever the manifest declares. Pin  to a known archive digest to
+    # make a deployment reproducible; leave it empty to take whatever :latest points at.
+    # Xmx is measured per product (peak un-archive heap), not uniform.
+    fc-cbioportal-tcga:
+      # All six products run the ONE image the fc-cbioportal repo's CI publishes
+      # (only branch-master), selected by manifest -- so name it explicitly rather
+      # than defaulting to the workload key, and pin the tag rather than follow a
+      # release-wide tagbio.imageTag.
+      imageName: fc-cbioportal
+      imageTag: branch-master
+      enabled: false
+      archiveSync:
+        ref: platform-registry.dev.tag.bio/fc-archives/tcga:latest
+        dest: /storage/data/cbioportal-data/archive.ser
+        sha256: ""
+        # Pull credentials default to the platform READ account in the
+        # `tagbio-ci-docker` secret (TAGBIO_PLATFORM_REGISTRY_USER/_PASSWORD),
+        # present in every deploy namespace -- nothing to set per environment.
+        # Override credentialsSecret / usernameKey / passwordKey only where
+        # that secret does not exist.
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest carrying a data_model: with no command the
+          # engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest_tcga.json
+          archive: /storage/data/cbioportal-data/archive.ser
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    fc-cbioportal-tcga-gdc:
+      # All six products run the ONE image the fc-cbioportal repo's CI publishes
+      # (only branch-master), selected by manifest -- so name it explicitly rather
+      # than defaulting to the workload key, and pin the tag rather than follow a
+      # release-wide tagbio.imageTag.
+      imageName: fc-cbioportal
+      imageTag: branch-master
+      enabled: false
+      archiveSync:
+        ref: platform-registry.dev.tag.bio/fc-archives/tcga-gdc:latest
+        dest: /storage/data/cbioportal-data/archive-tcga-gdc.ser
+        sha256: ""
+        # Pull credentials default to the platform READ account in the
+        # `tagbio-ci-docker` secret (TAGBIO_PLATFORM_REGISTRY_USER/_PASSWORD),
+        # present in every deploy namespace -- nothing to set per environment.
+        # Override credentialsSecret / usernameKey / passwordKey only where
+        # that secret does not exist.
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest carrying a data_model: with no command the
+          # engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest_tcga-gdc.json
+          archive: /storage/data/cbioportal-data/archive-tcga-gdc.ser
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    fc-cbioportal-msk:
+      # All six products run the ONE image the fc-cbioportal repo's CI publishes
+      # (only branch-master), selected by manifest -- so name it explicitly rather
+      # than defaulting to the workload key, and pin the tag rather than follow a
+      # release-wide tagbio.imageTag.
+      imageName: fc-cbioportal
+      imageTag: branch-master
+      enabled: false
+      archiveSync:
+        ref: platform-registry.dev.tag.bio/fc-archives/msk:latest
+        dest: /storage/data/cbioportal-data/archive-msk.ser
+        sha256: ""
+        # Pull credentials default to the platform READ account in the
+        # `tagbio-ci-docker` secret (TAGBIO_PLATFORM_REGISTRY_USER/_PASSWORD),
+        # present in every deploy namespace -- nothing to set per environment.
+        # Override credentialsSecret / usernameKey / passwordKey only where
+        # that secret does not exist.
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest carrying a data_model: with no command the
+          # engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest_msk.json
+          archive: /storage/data/cbioportal-data/archive-msk.ser
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 4G
+    fc-cbioportal-studies:
+      # All six products run the ONE image the fc-cbioportal repo's CI publishes
+      # (only branch-master), selected by manifest -- so name it explicitly rather
+      # than defaulting to the workload key, and pin the tag rather than follow a
+      # release-wide tagbio.imageTag.
+      imageName: fc-cbioportal
+      imageTag: branch-master
+      enabled: false
+      archiveSync:
+        ref: platform-registry.dev.tag.bio/fc-archives/studies:latest
+        dest: /storage/data/cbioportal-data/archive-studies.ser
+        sha256: ""
+        # Pull credentials default to the platform READ account in the
+        # `tagbio-ci-docker` secret (TAGBIO_PLATFORM_REGISTRY_USER/_PASSWORD),
+        # present in every deploy namespace -- nothing to set per environment.
+        # Override credentialsSecret / usernameKey / passwordKey only where
+        # that secret does not exist.
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest carrying a data_model: with no command the
+          # engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest_studies.json
+          archive: /storage/data/cbioportal-data/archive-studies.ser
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 4G
+    fc-cbioportal-pediatric:
+      # All six products run the ONE image the fc-cbioportal repo's CI publishes
+      # (only branch-master), selected by manifest -- so name it explicitly rather
+      # than defaulting to the workload key, and pin the tag rather than follow a
+      # release-wide tagbio.imageTag.
+      imageName: fc-cbioportal
+      imageTag: branch-master
+      enabled: false
+      archiveSync:
+        ref: platform-registry.dev.tag.bio/fc-archives/pediatric:latest
+        dest: /storage/data/cbioportal-data/archive-pediatric.ser
+        sha256: ""
+        # Pull credentials default to the platform READ account in the
+        # `tagbio-ci-docker` secret (TAGBIO_PLATFORM_REGISTRY_USER/_PASSWORD),
+        # present in every deploy namespace -- nothing to set per environment.
+        # Override credentialsSecret / usernameKey / passwordKey only where
+        # that secret does not exist.
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest carrying a data_model: with no command the
+          # engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest_pediatric.json
+          archive: /storage/data/cbioportal-data/archive-pediatric.ser
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    fc-cbioportal-cellline:
+      # All six products run the ONE image the fc-cbioportal repo's CI publishes
+      # (only branch-master), selected by manifest -- so name it explicitly rather
+      # than defaulting to the workload key, and pin the tag rather than follow a
+      # release-wide tagbio.imageTag.
+      imageName: fc-cbioportal
+      imageTag: branch-master
+      enabled: false
+      archiveSync:
+        ref: platform-registry.dev.tag.bio/fc-archives/cellline:latest
+        dest: /storage/data/cbioportal-data/archive-cellline.ser
+        sha256: ""
+        # Pull credentials default to the platform READ account in the
+        # `tagbio-ci-docker` secret (TAGBIO_PLATFORM_REGISTRY_USER/_PASSWORD),
+        # present in every deploy namespace -- nothing to set per environment.
+        # Override credentialsSecret / usernameKey / passwordKey only where
+        # that secret does not exist.
+      fcCommand:
+        fcArgs:
+          # Required alongside a manifest carrying a data_model: with no command the
+          # engine builds from source data the image does not have.
+          command: run_server
+          manifest: manifest_cellline.json
+          archive: /storage/data/cbioportal-data/archive-cellline.ser
+          python_sdk: $TAGBIO_PY
+          r_sdk: $TAGBIO_R_UTILS
+          groups: "false"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 2G
+    fc-celluloid:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 2G
+    fc-charlie:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 6G
+    fc-darkside:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 1G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 1G
+    fc-epic:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 5G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-faers:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.yaml
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 8G
+    fc-friday:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 8G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G 
+    fc-clinvar: 
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser 
+          main: main.json
+          groups: "false"
+          r_sdk: "$TAGBIO_R_UTILS"
+          python_sdk: "$TAGBIO_PY"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 50m
+          Xmx: 16G 
+      livenessProbe:
+        initialDelaySeconds: 300
+        path: '/s'
+        periodSeconds: 60
+        port: 8000
+      reservation:
+        cpu: 100m
+        memory: 16G 
+      timeoutSeconds: 3000
+    fc-gene:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 7G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-global:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 5G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 2G
+    fc-halleloo:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 2G
+    fc-imvigor:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 1G
+    fc-iris:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          config: config/config.json
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 1G
+    fc-mcduck:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 6G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-metabric:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 3G
+    fc-mordecai:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 2G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 1G
+    fc-nct02684006-refined:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-relevant:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 60
+      reservation:
+        memory: 4G
+    fc-roy:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          sql_connection: "_connections/cluster_connection.json"
+          config: config/config.json
+          main: main.json
+        jar: fc_sql_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 2G
+    fc-rutherford-test:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          python_sdk: "$TAGBIO_PY"
+          r_sdk: "$TAGBIO_R_UTILS"
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 16G
+      livenessProbe:
+        initialDelaySeconds: 300
+      reservation:
+        memory: 8G
+    fc-variant:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 10G
+      livenessProbe:
+        initialDelaySeconds: 600
+      reservation:
+        memory: 10G
+    fc-vip:
+      enabled: false
+      fcCommand:
+        fcArgs:
+          archive: ./archive.ser
+          main: main.json
+          groups: "true"
+        jar: fc_csv_server.jar
+        javaArgs:
+          Xss: 5M
+          Xmx: 4G
+      livenessProbe:
+        initialDelaySeconds: 180
+      reservation:
+        memory: 7G
+  redeploySchedule: 0 10 * * *
+  redeploy:
+    # 1.3.180: tagbio-ci-pipeline is published only as branch-master (like
+    # fc-cbio-tcga), so the redeploy job must not follow a release-pinned
+    # tagbio.imageTag - it went ErrImagePull on every env pinned to a release.
+    imageTag: branch-master
+  site:
+    adminEmail: support@tag.bio
+    name: ""

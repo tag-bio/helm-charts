@@ -1,0 +1,198 @@
+{{- /* 1.3.192: optional tagbio-mcp (remote MCP server). See values.yaml `tagbio.mcp`.
+       Default off renders nothing. Modeled on rutherford.yaml (dedicated template: own
+       image/tag, `not-protected` firewall role, plain env -- no lookup-guarded Secret, so
+       value changes propagate on upgrade). */}}
+{{- $mcp := .Values.tagbio.mcp | default dict }}
+{{- if and .Values.tagbio.coreStack.enabled $mcp.enabled }}
+{{- $img := $mcp.image | default dict }}
+{{- $caps := $mcp.caps | default dict }}
+{{- $path := $mcp.path | default "/mcp" }}
+{{- $kungUrl := $mcp.kungUrl | default (printf "%s:8000" .Values.tagbio.gateway.baseUrlInternal) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    deployment.tag.bio/name: tagbio-mcp
+    firewall.tag.bio/role: not-protected
+  name: tagbio-mcp
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  progressDeadlineSeconds: 600
+  replicas: {{ $mcp.replicas | default 1 | int64 }}
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      deployment.tag.bio/name: tagbio-mcp
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        deployment.tag.bio/name: tagbio-mcp
+        deployment.tag.bio/helm-chart-version: {{ .Chart.Version }}
+        firewall.tag.bio/role: not-protected
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: NotIn
+                values:
+                - "true"
+            weight: 100
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: DoesNotExist
+            weight: 99
+{{- $csSN := ((.Values.tagbio.coreStack | default dict).stableNode | default dict) }}
+{{- if $csSN.enabled }}
+          - preference:
+              matchExpressions:
+              - key: {{ $csSN.labelKey | default "tagbio-stable" }}
+                operator: In
+                values:
+                - {{ $csSN.labelValue | default "true" | quote }}
+            weight: 100
+{{- end }}
+{{- if and $csSN.enabled $csSN.required }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: {{ $csSN.labelKey | default "tagbio-stable" }}
+                operator: In
+                values:
+                - {{ $csSN.labelValue | default "true" | quote }}
+{{- end }}
+{{- if and $csSN.enabled (ternary $csSN.tolerate true (hasKey $csSN "tolerate")) }}
+      tolerations:
+        - key: {{ $csSN.taintKey | default ($csSN.labelKey | default "tagbio-stable") }}
+          operator: Equal
+          value: {{ $csSN.taintValue | default ($csSN.labelValue | default "true") | quote }}
+          effect: NoSchedule
+{{- end }}
+      containers:
+        - image: {{ $img.repository | default "platform-registry.dev.tag.bio/tagbio-mcp" }}:{{ $img.tag | default "branch-master" }}
+          imagePullPolicy: Always
+          name: tagbio-mcp
+          env:
+            - name: TAGBIO_BASE_URL
+              value: {{ $kungUrl | quote }}
+            - name: TAGBIO_SITE
+              value: {{ .Values.tagbio.site.name | quote }}
+            - name: TAGBIO_MCP_PUBLIC_URL
+              value: {{ printf "https://%s%s" .Values.tagbio.hosts.cluster $path | quote }}
+            - name: TAGBIO_MCP_PATH
+              value: {{ $path | quote }}
+            - name: TAGBIO_MCP_PORT
+              value: "8000"
+            - name: TAGBIO_MCP_SUPPORT_CONTACT
+              value: {{ $mcp.supportContact | default "support@tag.bio" | quote }}
+            - name: TAGBIO_MCP_LOG_LEVEL
+              value: {{ $mcp.logLevel | default "info" | quote }}
+            - name: TAGBIO_MCP_QUERY_DEADLINE_S
+              value: {{ $mcp.queryDeadlineSeconds | default 50 | int64 | quote }}
+            - name: TAGBIO_MCP_CHART_PNG
+              value: {{ ternary "true" "false" (ternary $mcp.chartPng true (hasKey $mcp "chartPng")) | quote }}
+            - name: TAGBIO_MCP_MAX_UNFILTERED_ENTITIES
+              value: {{ ternary $caps.maxUnfilteredEntities 10000 (hasKey $caps "maxUnfilteredEntities") | int64 | quote }}
+            - name: TAGBIO_MCP_MAX_CELLS
+              value: {{ $caps.maxCells | default 2000000 | int64 | quote }}
+            - name: TAGBIO_MCP_MAX_SELECT_COLLECTIONS
+              value: {{ $caps.maxSelectCollections | default 50 | int64 | quote }}
+            - name: TAGBIO_MCP_MAX_DOWNLOAD_BYTES
+              value: {{ $caps.maxDownloadBytes | default 67108864 | int64 | quote }}
+            - name: TAGBIO_MCP_MAX_INLINE_ROWS
+              value: {{ $caps.maxInlineRows | default 2000 | int64 | quote }}
+            - name: TAGBIO_MCP_MAX_INLINE_BYTES
+              value: {{ $caps.maxInlineBytes | default 1048576 | int64 | quote }}
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: {{ $path }}/healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ $path }}/healthz
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+{{ toYaml ($mcp.resources | default (dict "requests" (dict "cpu" "100m" "memory" "1Gi") "limits" (dict "memory" "4Gi"))) | indent 12 }}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+        - name: tagbio-cluster-registry-creds
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tagbio-mcp
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8000
+    protocol: TCP
+    targetPort: 8000
+  selector:
+    deployment.tag.bio/name: tagbio-mcp
+  sessionAffinity: None
+  type: ClusterIP
+---
+{{- /* Own Ingress object on the same host as platform-gateway: ingress-nginx routes the
+       longer path here. Mirrors platform-gateway's TLS conditional (Azure only) and its
+       API version: v1 where the cluster has it (>= 1.19), else v1beta1 (demo 1.18). */}}
+{{- if .Capabilities.APIVersions.Has "networking.k8s.io/v1/Ingress" }}
+apiVersion: networking.k8s.io/v1
+{{- else }}
+apiVersion: networking.k8s.io/v1beta1
+{{- end }}
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+  name: tagbio-mcp
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+{{- if .Values.azure.aadClientId }}
+  tls:
+    - hosts:
+        - {{ .Values.tagbio.hosts.cluster }}
+      secretName: tagbio-cluster
+{{- end }}
+  rules:
+    - host: {{ .Values.tagbio.hosts.cluster }}
+      http:
+        paths:
+{{- if .Capabilities.APIVersions.Has "networking.k8s.io/v1/Ingress" }}
+          - path: {{ $path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: tagbio-mcp
+                port:
+                  number: 8000
+{{- else }}
+          - path: {{ $path }}
+            backend:
+              serviceName: tagbio-mcp
+              servicePort: 8000
+{{- end }}
+{{- end }}
