@@ -280,7 +280,7 @@ tagbio:
         cpu: 100m
         memory: 1Gi
       limits:
-        memory: 2Gi
+        memory: 4Gi
     caps:
       maxUnfilteredEntities: 0   # 0 = entity cap off; maxCells/deadline/inline caps still govern
       maxCells: 24000000   # ~35s to generate at full width; the 50s deadline is the real bound
