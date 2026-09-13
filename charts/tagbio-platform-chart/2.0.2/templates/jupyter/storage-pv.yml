@@ -1,0 +1,118 @@
+{{- /* 2.0.2: sites whose jupyter PV/PVCs pre-exist with an immutable volume source (UCSF: NFS against the EFS DNS name) set tagbio.storage.createJupyterVolumes=false; the existing objects stay untouched. */}}
+{{- if .Values.tagbio.storage.createJupyterVolumes }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  labels:
+    jupyter.tag.bio/name: tagbio-jupyter-hub-storage-pv
+  name: tagbio-jupyter-hub-storage-pv
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+  azureFile:
+    readOnly: false
+    secretName: {{ .Values.environment.azure.secret.name }}
+    secretNamespace: {{ .Values.environment.azure.secret.namespace }}
+    shareName: {{ .Values.environment.azure.fileshare.name }}/jupyter/hub
+  mountOptions:
+    - 'dir_mode=0700'
+    - 'file_mode=0600'
+    - 'gid=100'
+    - 'nolock'
+    - 'uid=1000'
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+  nfs:
+    path: {{ .Values.environment.nfs.pvPathPrefix | default .Values.environment.nfs.path | default "" }}/jupyter/hub
+    readOnly: false
+    server: {{ .Values.environment.nfs.host }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "efs" }}
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: {{ .Values.environment.efs.fileSystemId }}:/jupyter/hub
+{{ end }}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  capacity:
+    storage: 1000Gi
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tagbio-jupyter-users-storage-pv
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+  azureFile:
+    readOnly: false
+    secretName: {{ .Values.environment.azure.secret.name }}
+    secretNamespace: {{ .Values.environment.azure.secret.namespace }}
+    shareName: {{ .Values.environment.azure.fileshare.name }}/jupyter/users
+  mountOptions:
+    - 'dir_mode=0700'
+    - 'file_mode=0600'
+    - 'gid=100'
+    - 'nolock'
+    - 'uid=1000'
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+  nfs:
+    path: {{ .Values.environment.nfs.pvPathPrefix | default .Values.environment.nfs.path | default "" }}/jupyter/users
+    readOnly: false
+    server: {{ .Values.environment.nfs.host }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "efs" }}
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: {{ .Values.environment.efs.fileSystemId }}:/jupyter/users
+{{ end }}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1000Gi
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tagbio-jupyter-users-shared-storage-pv
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+  azureFile:
+    readOnly: false
+    secretName: {{ .Values.environment.azure.secret.name }}
+    secretNamespace: {{ .Values.environment.azure.secret.namespace }}
+    shareName: {{ .Values.environment.azure.fileshare.name }}/jupyter/users/tagbio-jupyter-shared
+  mountOptions:
+    - 'dir_mode=0700'
+    - 'file_mode=0600'
+    - 'gid=100'
+    - 'nolock'
+    - 'uid=1000'
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+  nfs:
+    path: {{ .Values.environment.nfs.pvPathPrefix | default .Values.environment.nfs.path | default "" }}/jupyter/users/tagbio-jupyter-shared
+    readOnly: false
+    server: {{ .Values.environment.nfs.host }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "efs" }}
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: {{ .Values.environment.efs.fileSystemId }}:/jupyter/users/tagbio-jupyter-shared
+{{ end }}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1000Gi
+{{- end }}
