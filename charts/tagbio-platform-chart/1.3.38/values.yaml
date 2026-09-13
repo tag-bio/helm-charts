@@ -407,8 +407,8 @@ tagbio:
       reservation:
         memory: 4G
     fc-roy:
-     enabled: false
-     fcCommand:
+      enabled: false
+      fcCommand:
         fcArgs:
           sql_connection: "_connections/cluster_connection.json"
           config: config/config.json

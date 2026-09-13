@@ -127,7 +127,7 @@ jupyterhub:
       # name: jupyter/datascience-notebook
       # tag: 'lab-2.2.9'
     initContainers:
-+      - command: ['/usr/bin/bash', '-c', "echo copying and chowning; cp -nR /tagbio-notebook/tagbio-home-init/. /home/jovyan ; IFS=$'\n'; for file_name in $(find /home/jovyan/ -maxdepth 2); do chown -v jovyan:users \"$file_name\"; chmod -v go-rwx \"$file_name\"; done; chmod g+w /opt/conda/envs/tagbio/lib/R/*"]
+      - command: ['/usr/bin/bash', '-c', "echo copying and chowning; cp -nR /tagbio-notebook/tagbio-home-init/. /home/jovyan ; IFS=$'\n'; for file_name in $(find /home/jovyan/ -maxdepth 2); do chown -v jovyan:users \"$file_name\"; chmod -v go-rwx \"$file_name\"; done; chmod g+w /opt/conda/envs/tagbio/lib/R/*"]
         image: platform-registry.dev.tag.bio/tagbio-notebook:branch-master
         imagePullPolicy: Always
         name: chown
