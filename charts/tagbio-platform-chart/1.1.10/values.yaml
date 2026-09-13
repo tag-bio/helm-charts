@@ -368,7 +368,7 @@ tagbio:
           archive: ./archive.ser
           groups: "false"
           process_count: "$(nproc)"
-          main=main.json
+          main: main.json
           protocols_dir: "./"
         jar: fc_csv_server.jar
         javaArgs:
