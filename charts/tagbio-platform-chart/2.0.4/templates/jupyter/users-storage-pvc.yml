@@ -1,0 +1,34 @@
+{{- /* 2.0.2: sites whose jupyter PV/PVCs pre-exist with an immutable volume source (UCSF: NFS against the EFS DNS name) set tagbio.storage.createJupyterVolumes=false; the existing objects stay untouched. */}}
+{{- if .Values.tagbio.storage.createJupyterVolumes }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tagbio-jupyter-users-storage-pvc
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1000Gi
+  volumeName: tagbio-jupyter-users-storage-pv
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tagbio-jupyter-users-shared-storage-pvc
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1000Gi
+  volumeName: tagbio-jupyter-users-shared-storage-pv
+{{- end }}
