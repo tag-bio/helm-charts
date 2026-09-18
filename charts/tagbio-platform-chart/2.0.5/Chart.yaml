@@ -1,0 +1,17 @@
+apiVersion: v2
+name: tagbio-platform
+description: Tag.bio platform (kung, rutherford, login-service, JupyterHub, public FCs) for Kubernetes 1.25 and newer. The 1.3.x line serves Kubernetes 1.18-1.21 clusters.
+version: 2.0.5
+kubeVersion: ">=1.25.0-0"
+dependencies:
+  - name: jupyterhub
+    repository: https://jupyterhub.github.io/helm-chart
+    version: 3.3.7
+home: https://github.com/tag-bio/helm-charts
+icon: https://tagbio-assets.s3.us-west-2.amazonaws.com/site-logos/tagbio-logo-icon-norm-color.png
+keywords:
+  - jupyter
+  - platform
+  - tagbio
+sources:
+  - https://github.com/tag-bio/helm-charts
