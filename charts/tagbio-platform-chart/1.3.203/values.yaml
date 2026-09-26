@@ -315,16 +315,21 @@ tagbio:
     # sit in the container's writable layer (lost on restart anyway, but uncounted and unbounded
     # from the scheduler's view). sizeLimit bounds the volume (kubelet evicts the pod past it);
     # request is added to resources.requests as ephemeral-storage so the pod lands on a node with
-    # that much local disk (an ephemeral-storage key already in resources.requests wins).
-    # Either set to "" = left out. enabled: false = no volume, no request (previous behaviour).
+    # that much local disk (skipped when resources.requests or resources.limits already has an
+    # ephemeral-storage key). Either set to "" = left out. enabled: false (or "false"/"no"/"0")
+    # = no volume, no request (previous behaviour). sizeLimit sits above the ~10 GiB server cap:
+    # each uvicorn worker can overshoot the cap between sweeps, plus in-flight files and the
+    # result cache.
     tmpVolume:
       enabled: true
-      sizeLimit: 12Gi
+      sizeLimit: 16Gi
       request: 12Gi
-    # 1.3.203: artifact store cap in bytes -> TAGBIO_MCP_ARTIFACT_STORE_MAX_BYTES. Empty = env
-    # not rendered, server default min(10 GiB, 5% of the store's filesystem). Note that an
-    # emptyDir reports the NODE disk size, so the 5% share is of the node root disk; keep this
-    # below tmpVolume.sizeLimit.
+    # 1.3.203: artifact store cap -> TAGBIO_MCP_ARTIFACT_STORE_MAX_BYTES. Bytes, as a positive
+    # integer (e.g. 10737418240); quantities like 8Gi, 0 or negatives fail the render. Empty =
+    # env not rendered, server default min(10 GiB, 5% of the store's filesystem; an emptyDir
+    # reports the NODE disk size, so that share is of the node root disk). Leave >= ~30%
+    # headroom under tmpVolume.sizeLimit: each uvicorn worker can overshoot the cap between
+    # sweeps.
     artifactStoreMaxBytes: ""
     history:
       # 1.3.202: save completed run_protocol results to the caller's Studio history -- one card
