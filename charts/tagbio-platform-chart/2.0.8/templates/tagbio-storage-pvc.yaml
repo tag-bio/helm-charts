@@ -1,0 +1,116 @@
+{{- /* 2.0: app/system shared-storage PV+PVC (pre-install hooks). Off by default: the 1.3 sites create these by hand; UCSF/muhdo set it true */}}
+{{- if .Values.tagbio.storage.createAppVolumes }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tagbio-app-storage
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-13"
+    helm.sh/resource-policy: keep
+spec:
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+  azureFile:
+    readOnly: false
+    secretName: {{ .Values.environment.azure.secret.name }}
+    secretNamespace: {{ .Values.environment.azure.secret.namespace }}
+    shareName: {{ .Values.environment.azure.fileshare.name }}
+  mountOptions:
+    - 'dir_mode=0755'
+    - 'file_mode=0644'
+    - 'nolock'
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+  nfs:
+    path: {{ .Values.environment.nfs.path }}
+    readOnly: false
+    server: {{ .Values.environment.nfs.host }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "efs" }}
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: {{ .Values.environment.efs.fileSystemId }}:{{ .Values.environment.nfs.path }}
+{{ end }}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1000Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tagbio-storage
+  namespace: {{ .Values.tagbio.namespaces.app }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-13"
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1000Gi
+  volumeName: tagbio-app-storage
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tagbio-fc-storage
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-13"
+    helm.sh/resource-policy: keep
+spec:
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+  azureFile:
+    readOnly: false
+    secretName: {{ .Values.environment.azure.secret.name }}
+    secretNamespace: {{ .Values.environment.azure.secret.namespace }}
+    shareName: {{ .Values.environment.azure.fileshare.name }}
+  mountOptions:
+    - 'dir_mode=0755'
+    - 'file_mode=0644'
+    - 'nolock'
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+  nfs:
+    path: {{ .Values.environment.nfs.path }}
+    readOnly: false
+    server: {{ .Values.environment.nfs.host }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "efs" }}
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: {{ .Values.environment.efs.fileSystemId }}:{{ .Values.environment.nfs.path }}
+{{ end }}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1000Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tagbio-fc-storage
+  namespace: {{ .Values.tagbio.namespaces.app }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-13"
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1000Gi
+  volumeName: tagbio-fc-storage
+{{- end }}
