@@ -1167,6 +1167,9 @@ tagbio:
       tag: branch-master
       pullPolicy: Always
     replicas: 1
+    # Own namespace recommended (payment secrets apart from data products and sandbox jobs). Must exist
+    # with the Secret and tagbio-platform-registry-creds in it. Empty = tagbio.namespaces.app.
+    namespace: ""
     pathPrefix: /billing
     secretName: tagbio-billing        # existing Secret (e.g. an ExternalSecret from Key Vault)
     stripePriceCommercial: ""         # price_... ($25/month)

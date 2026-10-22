@@ -4,15 +4,19 @@ entitlements for a paid MCP site. Off by default (renders nothing). Secrets come
 TAGBIO_BILLING_DATABASE_URL, TAGBIO_BILLING_INTERNAL_TOKEN, TAGBIO_BILLING_STRIPE_SECRET_KEY and
 TAGBIO_BILLING_STRIPE_WEBHOOK_SECRET. Only <pathPrefix>/v1/* is published on the site host; the internal
 reserve/commit API and /healthz stay inside the cluster, and a NetworkPolicy admits only tagbio-mcp and
-the ingress controller's namespace. */}}
+the ingress controller's namespace. tagbio.billing.namespace (2.0.15) runs it in its own namespace so payment
+secrets never share one with data products or customer-code sandbox jobs; the Ingress then gets its own
+cert-manager certificate for the site host (the shared tagbio-cluster secret lives in the app namespace). */}}
 {{- $b := .Values.tagbio.billing | default dict }}
 {{- if $b.enabled }}
 {{- $prefix := $b.pathPrefix | default "/billing" }}
+{{- $ns := $b.namespace | default .Values.tagbio.namespaces.app }}
+{{- $own := ne $ns .Values.tagbio.namespaces.app }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tagbio-billing
-  namespace: {{ .Values.tagbio.namespaces.app }}
+  namespace: {{ $ns }}
   labels:
     deployment.tag.bio/name: tagbio-billing
     firewall.tag.bio/role: not-protected
@@ -91,7 +95,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: tagbio-billing
-  namespace: {{ .Values.tagbio.namespaces.app }}
+  namespace: {{ $ns }}
   labels:
     deployment.tag.bio/name: tagbio-billing
 spec:
@@ -103,12 +107,16 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-{{- with mergeOverwrite (deepCopy (.Values.tagbio.ingress.annotations | default dict)) ((($b.ingress | default dict).annotations) | default dict) }}
+{{- $ann := mergeOverwrite (deepCopy (.Values.tagbio.ingress.annotations | default dict)) ((($b.ingress | default dict).annotations) | default dict) }}
+{{- if and $own .Values.tagbio.ingress.tls.enabled .Values.tagbio.ingress.clusterIssuer }}
+{{- $_ := set $ann "cert-manager.io/cluster-issuer" .Values.tagbio.ingress.clusterIssuer }}
+{{- end }}
+{{- with $ann }}
   annotations:
 {{ toYaml . | indent 4 }}
 {{- end }}
   name: tagbio-billing
-  namespace: {{ .Values.tagbio.namespaces.app }}
+  namespace: {{ $ns }}
 spec:
 {{- if .Values.tagbio.ingress.className }}
   ingressClassName: {{ .Values.tagbio.ingress.className }}
@@ -116,7 +124,7 @@ spec:
 {{- if .Values.tagbio.ingress.tls.enabled }}
   tls:
     - hosts: [{{ .Values.tagbio.hosts.cluster }}]
-      secretName: tagbio-cluster
+      secretName: {{ ternary "tagbio-billing-tls" "tagbio-cluster" $own }}
 {{- end }}
   rules:
     - host: {{ .Values.tagbio.hosts.cluster }}
@@ -133,7 +141,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tagbio-billing
-  namespace: {{ .Values.tagbio.namespaces.app }}
+  namespace: {{ $ns }}
 spec:
   podSelector:
     matchLabels:
@@ -144,6 +152,9 @@ spec:
         - podSelector:
             matchLabels:
               deployment.tag.bio/name: tagbio-mcp
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.tagbio.namespaces.app }}
 {{- range ($b.ingressNamespaces | default (list "traefik" "ingress-nginx")) }}
         - namespaceSelector:
             matchLabels:
