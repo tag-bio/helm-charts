@@ -1128,6 +1128,9 @@ tagbio:
   # entityNameSingular, entityNamePlural, private}. Default false = renders identical to 2.0.9.
   catalog:
     seedPublicFcs: false
+    # Seeded rows are private (only users with a user_capacitor_auth grant) unless this or the
+    # per-FC catalog.private is explicitly false. Fails closed by design.
+    defaultPrivate: true
   site:
     adminEmail: support@tag.bio
     # name is the `site` key of every row in the kung-services database (capacitors, site_user_group,

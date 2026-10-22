@@ -1,6 +1,7 @@
 {{- /* 2.0.10: opt-in. Adds a kung-services `capacitors` row for every enabled public FC that has none for
 this site (tagbio.site.name), so a fresh site lists its products without hand-written SQL. Idempotent: an
-existing row is never changed. Runs after install/upgrade, through the kung-services API as an admin caller
+existing row is never changed. Fails closed: a seeded row is private unless
+publicFcs.<fc>.catalog.private or tagbio.catalog.defaultPrivate is explicitly false. Runs after install/upgrade, through the kung-services API as an admin caller
 (the same headers kung sends); the pod carries the gateway firewall label that NetworkPolicy admits. */}}
 {{- if .Values.tagbio.catalog.seedPublicFcs }}
 {{- $site := required "tagbio.site.name is required when tagbio.catalog.seedPublicFcs is true" .Values.tagbio.site.name }}
@@ -66,7 +67,7 @@ spec:
 {{- range $key, $fc := .Values.tagbio.publicFcs }}
 {{- if and $fc $fc.enabled }}
 {{- $c := $fc.catalog | default dict }}
-{{- $row := dict "key" $key "site" $site "url" (printf "/fc-svc/%s/" $key) "private" (ternary 1 0 (eq (toString $c.private) "true")) "require_auth" 1 "displayname" ($c.displayName | default $key) "description" ($c.description | default "") "link" ($c.link | default "") "entity_name_singular" ($c.entityNameSingular | default "") "entity_name_plural" ($c.entityNamePlural | default "") }}
+{{- $row := dict "key" $key "site" $site "url" (printf "/fc-svc/%s/" $key) "private" (ternary 0 1 (eq (toString (ternary $c.private $.Values.tagbio.catalog.defaultPrivate (hasKey $c "private"))) "false")) "require_auth" 1 "displayname" ($c.displayName | default $key) "description" ($c.description | default "") "link" ($c.link | default "") "entity_name_singular" ($c.entityNameSingular | default "") "entity_name_plural" ($c.entityNamePlural | default "") }}
               seed {{ $key | quote }} '{{ $row | toJson | replace "'" "'\\''" }}' || rc=1
 {{- end }}
 {{- end }}
