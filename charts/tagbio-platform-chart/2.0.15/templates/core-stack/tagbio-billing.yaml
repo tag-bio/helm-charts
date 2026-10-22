@@ -59,6 +59,9 @@ spec:
             - {name: TAGBIO_BILLING_STRIPE_PRICE_COMMERCIAL, value: {{ required "tagbio.billing.stripePriceCommercial is required" $b.stripePriceCommercial | quote }}}
             - {name: TAGBIO_BILLING_JWKS_URL, value: {{ printf "http://kung.%s.svc.cluster.local:8000/login-service/.well-known/jwks.json" .Values.tagbio.namespaces.app | quote }}}
             - {name: TAGBIO_BILLING_JWT_ISSUER, value: {{ printf "https://%s/login-service" .Values.tagbio.hosts.cluster | quote }}}
+            # Only tokens issued to this audience are accepted on the user/admin API (MCP connector
+            # tokens are issued for https://<host>/mcp and must not reach billing).
+            - {name: TAGBIO_BILLING_JWT_AUDIENCE, value: {{ $b.jwtAudience | default "tagbio-login-client" | quote }}}
             - {name: TAGBIO_BILLING_ADMIN_EMAILS, value: {{ join "," ($b.adminEmails | default list) | quote }}}
             - {name: TAGBIO_BILLING_TRIAL_DAYS, value: {{ $b.trialDays | default 30 | int64 | quote }}}
             - {name: TAGBIO_BILLING_MONTHLY_CREDITS, value: {{ $b.monthlyCredits | default 400 | int64 | quote }}}

@@ -1171,6 +1171,7 @@ tagbio:
     secretName: tagbio-billing        # existing Secret (e.g. an ExternalSecret from Key Vault)
     stripePriceCommercial: ""         # price_... ($25/month)
     adminEmails: []
+    jwtAudience: tagbio-login-client  # login-service client of the site's web session; never the MCP resource
     trialDays: 30
     monthlyCredits: 400
     supportContact: support@tag.bio
