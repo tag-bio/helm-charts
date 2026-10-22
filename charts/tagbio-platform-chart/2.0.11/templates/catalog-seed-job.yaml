@@ -1,0 +1,78 @@
+{{- /* 2.0.10: opt-in. Adds a kung-services `capacitors` row for every enabled public FC that has none for
+this site (tagbio.site.name), so a fresh site lists its products without hand-written SQL. Idempotent: an
+existing row is never changed. Fails closed: a seeded row is private unless
+publicFcs.<fc>.catalog.private or tagbio.catalog.defaultPrivate is explicitly false. Runs after install/upgrade, through the kung-services API as an admin caller
+(the same headers kung sends); the pod carries the gateway firewall label that NetworkPolicy admits. */}}
+{{- if .Values.tagbio.catalog.seedPublicFcs }}
+{{- $site := required "tagbio.site.name is required when tagbio.catalog.seedPublicFcs is true" .Values.tagbio.site.name }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tagbio-catalog-seed
+  namespace: {{ .Values.tagbio.namespaces.app }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        job-name: tagbio-catalog-seed
+        firewall.tag.bio/role: gateway
+{{- with .Values.tagbio.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+      containers:
+        - name: seed
+          image: platform-registry.dev.tag.bio/alpine:{{ .Values.tagbio.imageTag }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+          env:
+            - name: KS
+              value: http://kung-services:8001
+            - name: SITE
+              value: {{ $site | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -u
+              H1="x-tagbio-groups: admin"
+              H2="x-tagbio-email: {{ .Values.tagbio.site.adminEmail }}"
+              i=0
+              until wget -qO- --header "$H1" --header "$H2" "$KS/db/capacitors?limit=1" >/dev/null 2>&1; do
+                i=$((i+1)); [ $i -ge 60 ] && { echo "kung-services not reachable"; exit 1; }; sleep 10
+              done
+              seed() {
+                key="$1"; row="$2"
+                have=$(wget -qO- --header "$H1" --header "$H2" "$KS/db/capacitors?key=$key&site=$SITE") || return 1
+                case "$have" in
+                  *'"key"'*) echo "keep  $key (row exists)";;
+                  *) wget -qO- --header "$H1" --header "$H2" --header "Content-Type: application/json" \
+                       --post-data "$row" "$KS/db/capacitors" >/dev/null && echo "added $key";;
+                esac
+              }
+              rc=0
+{{- range $key, $fc := .Values.tagbio.publicFcs }}
+{{- if and $fc $fc.enabled }}
+{{- $c := $fc.catalog | default dict }}
+{{- $row := dict "key" $key "site" $site "url" (printf "/fc-svc/%s/" $key) "private" (ternary 0 1 (eq (toString (ternary $c.private $.Values.tagbio.catalog.defaultPrivate (hasKey $c "private"))) "false")) "require_auth" 1 "displayname" ($c.displayName | default $key) "description" ($c.description | default "") "link" ($c.link | default "") "entity_name_singular" ($c.entityNameSingular | default "") "entity_name_plural" ($c.entityNamePlural | default "") }}
+              seed {{ $key | quote }} '{{ $row | toJson | replace "'" "'\\''" }}' || rc=1
+{{- end }}
+{{- end }}
+              exit $rc
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+{{- end }}
