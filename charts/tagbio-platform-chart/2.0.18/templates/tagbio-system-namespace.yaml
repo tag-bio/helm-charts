@@ -1,0 +1,17 @@
+{{- /* 2.0: off by default - Rancher projects or a previous install usually own these namespaces and Helm cannot adopt an unlabeled Namespace */}}
+{{- if .Values.tagbio.namespaces.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.tagbio.namespaces.system }}
+  labels:
+    tagbio.io/managed-by: fleet
+    {{- if .Values.tagbio.cluster.customer }}
+    tagbio.io/customer: {{ .Values.tagbio.cluster.customer }}
+    tagbio.io/environment: {{ .Values.tagbio.cluster.environment }}
+    {{- end }}
+    tagbio.io/component: system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+{{- end }}

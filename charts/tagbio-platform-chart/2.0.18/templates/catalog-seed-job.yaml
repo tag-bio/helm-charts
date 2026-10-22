@@ -1,0 +1,113 @@
+{{- /* 2.0.10, rewritten in 2.0.13: opt-in. Adds a kung-services `capacitors` row for every enabled public FC
+that has none for this site (tagbio.site.name), and (2.0.13) with tagbio.site.public makes the site row
+private=0 so any signed-in user can enter (access to paid actions is decided elsewhere, e.g. billing).
+Idempotent: existing capacitor rows are never changed. Fails closed: a seeded row is private unless
+publicFcs.<fc>.catalog.private or tagbio.catalog.defaultPrivate is explicitly false.
+Runs after install/upgrade with the kung-services image (Node; already on every node) through the
+kung-services API as an admin caller (the same headers kung sends); the pod carries the gateway
+firewall label that the NetworkPolicy admits. 2.0.10-2.0.12 used busybox wget, whose readiness probe
+(`?limit=1`) kung-services rejects with 400, so the hook timed out. */}}
+{{- if .Values.tagbio.catalog.seedPublicFcs }}
+{{- $site := required "tagbio.site.name is required when tagbio.catalog.seedPublicFcs is true" .Values.tagbio.site.name }}
+{{- $rows := list }}
+{{- range $key, $fc := .Values.tagbio.publicFcs }}
+{{- if and $fc $fc.enabled }}
+{{- $c := $fc.catalog | default dict }}
+{{- $rows = append $rows (dict "key" $key "site" $site "url" (printf "/fc-svc/%s/" $key) "private" (ternary 0 1 (eq (toString (ternary $c.private $.Values.tagbio.catalog.defaultPrivate (hasKey $c "private"))) "false")) "require_auth" 1 "displayname" ($c.displayName | default $key) "description" ($c.description | default "") "link" ($c.link | default "") "entity_name_singular" ($c.entityNameSingular | default "") "entity_name_plural" ($c.entityNamePlural | default "")) }}
+{{- end }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tagbio-catalog-seed
+  namespace: {{ .Values.tagbio.namespaces.app }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        job-name: tagbio-catalog-seed
+        firewall.tag.bio/role: gateway
+{{- with .Values.tagbio.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+      containers:
+        - name: seed
+          image: platform-registry.dev.tag.bio/kung-services:{{ .Values.tagbio.imageTag }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+          env:
+            - name: KS
+              value: http://kung-services:8001
+            - name: SITE
+              value: {{ $site | quote }}
+            - name: ADMIN_EMAIL
+              value: {{ .Values.tagbio.site.adminEmail | quote }}
+            - name: SITE_PUBLIC
+              value: {{ ternary "true" "false" (eq (toString .Values.tagbio.site.public) "true") | quote }}
+            - name: ROWS
+              value: {{ $rows | toJson | quote }}
+          command:
+            - node
+            - -e
+            - |
+              const http = require('http');
+              const base = new URL(process.env.KS);
+              const headers = { 'x-tagbio-groups': 'admin', 'x-tagbio-email': process.env.ADMIN_EMAIL };
+              function call(method, path, body) {
+                return new Promise((resolve, reject) => {
+                  const data = body === undefined ? null : JSON.stringify(body);
+                  const h = Object.assign({}, headers, data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {});
+                  const req = http.request({ hostname: base.hostname, port: base.port, path: path, method: method, headers: h }, res => {
+                    let out = ''; res.on('data', c => { out += c; });
+                    res.on('end', () => (res.statusCode >= 200 && res.statusCode < 300) ? resolve(out ? JSON.parse(out) : null) : reject(new Error(method + ' ' + path + ' -> ' + res.statusCode + ' ' + out.slice(0, 200))));
+                  });
+                  req.on('error', reject); if (data) req.write(data); req.end();
+                });
+              }
+              const sleep = ms => new Promise(r => setTimeout(r, ms));
+              const q = encodeURIComponent;
+              (async () => {
+                for (let i = 0; ; i++) {
+                  try { await call('GET', '/db/sites'); break; } catch (e) {
+                    if (i >= 60) { console.error('kung-services not reachable: ' + e.message); process.exit(1); }
+                    await sleep(10000);
+                  }
+                }
+                let failed = 0;
+                if (process.env.SITE_PUBLIC === 'true') {
+                  const site = (await call('GET', '/db/sites?key=' + q(process.env.SITE)))[0];
+                  if (!site) { console.error('site row ' + process.env.SITE + ' not found'); failed++; }
+                  else if (site.private) {
+                    // kung-services PUT replaces the whole row: send every column back
+                    await call('PUT', '/db/sites/' + q(process.env.SITE), Object.assign({}, site, { private: 0 }));
+                    console.log('site ' + process.env.SITE + ': private -> 0');
+                  } else { console.log('site ' + process.env.SITE + ': already public'); }
+                }
+                for (const row of JSON.parse(process.env.ROWS)) {
+                  try {
+                    const have = await call('GET', '/db/capacitors?key=' + q(row.key) + '&site=' + q(row.site));
+                    if (have && have.length) { console.log('keep  ' + row.key + ' (row exists)'); continue; }
+                    await call('POST', '/db/capacitors', row);
+                    console.log('added ' + row.key + (row.private ? ' (private)' : ' (public)'));
+                  } catch (e) { console.error(row.key + ': ' + e.message); failed++; }
+                }
+                process.exit(failed ? 1 : 0);
+              })().catch(e => { console.error(e.message); process.exit(1); });
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+{{- end }}
