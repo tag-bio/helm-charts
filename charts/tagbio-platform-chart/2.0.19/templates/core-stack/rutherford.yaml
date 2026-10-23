@@ -55,6 +55,9 @@
 {{- if and $mc.enabled (.Values.tagbio.rutherford | default dict).profileConnectCard }}
       , mcpUrl: 'https://{{ .Values.tagbio.hosts.cluster }}{{ $mc.path | default "/mcp" }}'
 {{- end }}
+{{- if (.Values.tagbio.rutherford | default dict).mcpOnly }}
+      , mcpOnly: true
+{{- end }}
 {{- $o2 := (.Values.tagbio.loginService | default dict).oauth2 | default dict }}
 {{- if $o2.enabled }}
 {{- $reset := $o2.passwordResetUrl }}

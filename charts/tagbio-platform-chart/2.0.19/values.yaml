@@ -270,6 +270,9 @@ tagbio:
   rutherford:
     # 2.0.18: show the "Connect Claude or ChatGPT" card (MCP URL) on the profile page. Opt-in.
     profileConnectCard: false
+    # 2.0.19: MCP-only site (tag-bio/rutherford): the web app shows only the account pages (Overview,
+    # Usage, Connect, Data, Account) and admin; Studio pages redirect to the account page.
+    mcpOnly: false
     # 1.3.190: per-component tag override for the frontend (same pattern as
     # tagbio.redeploy.imageTag / publicFcs.*.imageTag). Empty (default) follows
     # tagbio.imageTag exactly as before. Set it on an environment pinned to a
