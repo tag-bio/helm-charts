@@ -20,8 +20,12 @@ spec:
   entryPoints:
 {{ toYaml ($t.entryPoints | default (list "websecure" "web")) | indent 4 }}
   routes:
-    # everything under /fc-svc/<fc>/ except the product info document itself
-    - match: Host(`{{ .Values.tagbio.hosts.cluster }}`) && PathPrefix(`/fc-svc/`) && !PathRegexp(`^/fc-svc/[^/]+/?$`)
+    # Any path that mentions fc-svc (any case, encoded dash, extra slashes or dot segments: kung's
+    # Express router is case-insensitive) is refused, except a plain GET of a product's info
+    # document /fc-svc/<fc>/ with a strict name (no %, no slash, no leading dot).
+    - match: >-
+        Host(`{{ .Values.tagbio.hosts.cluster }}`) && PathRegexp(`(?i)fc(-|%2d)svc`)
+        && !(Method(`GET`) && PathRegexp(`^/fc-svc/[A-Za-z0-9_-][A-Za-z0-9._-]*/?$`))
       kind: Rule
       priority: 10000
       middlewares:
