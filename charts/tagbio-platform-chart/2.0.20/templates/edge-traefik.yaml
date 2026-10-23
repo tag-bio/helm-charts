@@ -1,0 +1,41 @@
+{{- /* 2.0.19: opt-in Traefik edge rules (tagbio.edge.traefik.*). Default off renders nothing. */}}
+{{- $t := ((.Values.tagbio.edge).traefik) | default dict }}
+{{- if $t.blockFcSvc }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: tagbio-deny
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  ipAllowList:
+    sourceRange: ["127.0.0.1/32"]   # nobody: every request gets 403
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: tagbio-block-fc-svc
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  entryPoints:
+{{ toYaml ($t.entryPoints | default (list "websecure" "web")) | indent 4 }}
+  routes:
+    # Any path that mentions fc-svc (any case, encoded dash, extra slashes or dot segments: kung's
+    # Express router is case-insensitive) is refused, except a plain GET of a product's info
+    # document /fc-svc/<fc>/, its status /s or its protocol list /p (2.0.20: the web app polls
+    # these at start-up; no data rows), with a strict name (no %, no slash, no leading dot).
+    - match: >-
+        Host(`{{ .Values.tagbio.hosts.cluster }}`) && PathRegexp(`(?i)fc(-|%2d)svc`)
+        && !(Method(`GET`) && PathRegexp(`^/fc-svc/[A-Za-z0-9_-][A-Za-z0-9._-]*/(s|p)?/?$`))
+      kind: Rule
+      priority: 10000
+      middlewares:
+        - name: tagbio-deny
+      services:
+        - name: kung
+          port: 8000
+{{- if .Values.tagbio.ingress.tls.enabled }}
+  tls:
+    secretName: tagbio-cluster
+{{- end }}
+{{- end }}
