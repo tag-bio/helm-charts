@@ -1,0 +1,36 @@
+{{- /* 2.0.19: opt-in Traefik edge rules (tagbio.edge.traefik.*). Default off renders nothing. */}}
+{{- $t := ((.Values.tagbio.edge).traefik) | default dict }}
+{{- if $t.blockFcSvc }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: tagbio-deny
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  ipAllowList:
+    sourceRange: ["127.0.0.1/32"]   # nobody: every request gets 403
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: tagbio-block-fc-svc
+  namespace: {{ .Values.tagbio.namespaces.app }}
+spec:
+  entryPoints:
+{{ toYaml ($t.entryPoints | default (list "websecure" "web")) | indent 4 }}
+  routes:
+    # everything under /fc-svc/<fc>/ except the product info document itself
+    - match: Host(`{{ .Values.tagbio.hosts.cluster }}`) && PathPrefix(`/fc-svc/`) && !PathRegexp(`^/fc-svc/[^/]+/?$`)
+      kind: Rule
+      priority: 10000
+      middlewares:
+        - name: tagbio-deny
+      services:
+        - name: kung
+          port: 8000
+{{- if .Values.tagbio.ingress.tls.enabled }}
+  tls:
+    secretName: tagbio-cluster
+{{- end }}
+{{- end }}
