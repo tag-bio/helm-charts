@@ -69,6 +69,7 @@ Current patches (since 1.3.168), both backward-compatible with the old hub image
 | 2.0.1 | 2026-09-13 | Hub reads `OAUTH_CLIENT_SECRET` from Secret `tagbio-oauth-client-secret` when `hub.config.GenericOAuthenticator.client_secret` is unset (was `""`, which overrode the env var and broke OAuth login on stage-dev). Sites that set the secret in values are unaffected. |
 | 2.0.0 | 2026-09-13 | **New 2.0 line for Kubernetes >=1.25** (UCSF, muhdo-prod, stage-dev): 1.3.198 + the helm3x modernization, JupyterHub chart 3.3.7, `kubeVersion: >=1.25.0-0`. See "Two version lines" above. |
 | 1.3.203 | 2026-09-26 | Same as 2.0.9 for the 1.3 line: tagbio-mcp `/tmp` emptyDir (16Gi sizeLimit, 12Gi ephemeral-storage request, on by default) and `tagbio.mcp.artifactStoreMaxBytes`. Verified with demo's live values: only the tagbio-mcp volume/volumeMount/request change. |
+| 1.3.204 | 2026-11-20 | Same as 2.0.21 for the 1.3 line: opt-in `tagbio.groupSync` (directory group -> Tag.bio group membership). Default off -> renders identical to 1.3.203. |
 | 1.3.202 | 2026-09-26 | Same as 2.0.8 for the 1.3 line: `tagbio.mcp.history.*`, default off → identical to 1.3.201 (verified with defaults and demo's live values). |
 | 1.3.201 | 2026-09-25 | Same as 2.0.7 for the 1.3 line: `tagbio.kung.imageTag`. Unset → identical to 1.3.200 (verified with demo's live values); set to `branch-master` → only kung's image and its puller entry change. |
 | 1.3.200 | 2026-09-25 | Same as 2.0.6 for the 1.3 line (tagbio-mcp workers, per-pod download budget, queue timeout, probe timings). |
