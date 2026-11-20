@@ -1,0 +1,169 @@
+{{- /* 2.0.15: optional tagbio-billing (tag-bio/tagbio-billing): Stripe subscriptions, credits ledger and
+entitlements for a paid MCP site. Off by default (renders nothing). Secrets come from an existing Secret
+(tagbio.billing.secretName; e.g. delivered by External Secrets from Key Vault) with the keys
+TAGBIO_BILLING_DATABASE_URL, TAGBIO_BILLING_INTERNAL_TOKEN, TAGBIO_BILLING_STRIPE_SECRET_KEY and
+TAGBIO_BILLING_STRIPE_WEBHOOK_SECRET. Only <pathPrefix>/v1/* is published on the site host; the internal
+reserve/commit API and /healthz stay inside the cluster, and a NetworkPolicy admits only tagbio-mcp and
+the ingress controller's namespace. tagbio.billing.namespace (2.0.15) runs it in its own namespace so payment
+secrets never share one with data products or customer-code sandbox jobs; the Ingress then gets its own
+cert-manager certificate for the site host (the shared tagbio-cluster secret lives in the app namespace). */}}
+{{- $b := .Values.tagbio.billing | default dict }}
+{{- if $b.enabled }}
+{{- $prefix := $b.pathPrefix | default "/billing" }}
+{{- $ns := $b.namespace | default .Values.tagbio.namespaces.app }}
+{{- $own := ne $ns .Values.tagbio.namespaces.app }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tagbio-billing
+  namespace: {{ $ns }}
+  labels:
+    deployment.tag.bio/name: tagbio-billing
+    firewall.tag.bio/role: not-protected
+spec:
+  replicas: {{ $b.replicas | default 1 | int64 }}
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      deployment.tag.bio/name: tagbio-billing
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+    type: RollingUpdate
+  template:
+    metadata:
+{{- with .Values.tagbio.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+      labels:
+        deployment.tag.bio/name: tagbio-billing
+        firewall.tag.bio/role: not-protected
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+      containers:
+        - name: tagbio-billing
+          image: "{{ $b.image.repository }}:{{ $b.image.tag }}"
+          imagePullPolicy: {{ $b.image.pullPolicy | default "Always" }}
+          ports:
+            - {containerPort: 8000, name: http}
+          envFrom:
+            - secretRef:
+                name: {{ required "tagbio.billing.secretName is required" $b.secretName }}
+          env:
+            - {name: TAGBIO_BILLING_PATH_PREFIX, value: {{ $prefix | quote }}}
+            - {name: TAGBIO_BILLING_SITE_URL, value: {{ printf "https://%s" .Values.tagbio.hosts.cluster | quote }}}
+            - {name: TAGBIO_BILLING_ACCOUNT_PATH, value: {{ $b.accountPath | default "/profile" | quote }}}
+            - {name: TAGBIO_BILLING_SUPPORT_CONTACT, value: {{ $b.supportContact | default "support@tag.bio" | quote }}}
+            - {name: TAGBIO_BILLING_STRIPE_PRICE_COMMERCIAL, value: {{ required "tagbio.billing.stripePriceCommercial is required" $b.stripePriceCommercial | quote }}}
+            - {name: TAGBIO_BILLING_JWKS_URL, value: {{ printf "http://kung.%s.svc.cluster.local:8000/login-service/.well-known/jwks.json" .Values.tagbio.namespaces.app | quote }}}
+            - {name: TAGBIO_BILLING_JWT_ISSUER, value: {{ printf "https://%s/login-service" .Values.tagbio.hosts.cluster | quote }}}
+            # Only tokens issued to this audience are accepted on the user/admin API (MCP connector
+            # tokens are issued for https://<host>/mcp and must not reach billing).
+            - {name: TAGBIO_BILLING_JWT_AUDIENCE, value: {{ $b.jwtAudience | default "tagbio-login-client" | quote }}}
+            - {name: TAGBIO_BILLING_ADMIN_EMAILS, value: {{ join "," ($b.adminEmails | default list) | quote }}}
+            - {name: TAGBIO_BILLING_TRIAL_DAYS, value: {{ $b.trialDays | default 30 | int64 | quote }}}
+            - {name: TAGBIO_BILLING_MONTHLY_CREDITS, value: {{ $b.monthlyCredits | default 400 | int64 | quote }}}
+            - {name: TAGBIO_BILLING_LOG_LEVEL, value: {{ $b.logLevel | default "info" | quote }}}
+{{- if $b.notifyUrl }}
+            - {name: TAGBIO_BILLING_NOTIFY_URL, value: {{ $b.notifyUrl | quote }}}
+{{- end }}
+          readinessProbe:
+            httpGet: {path: {{ printf "%s/healthz" $prefix }}, port: 8000}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: {{ printf "%s/healthz" $prefix }}, port: 8000}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+{{ toYaml ($b.resources | default (dict "requests" (dict "cpu" "100m" "memory" "256Mi") "limits" (dict "memory" "512Mi"))) | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tagbio-billing
+  namespace: {{ $ns }}
+  labels:
+    deployment.tag.bio/name: tagbio-billing
+spec:
+  selector:
+    deployment.tag.bio/name: tagbio-billing
+  ports:
+    - {name: http, port: 8000, targetPort: 8000}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+{{- $ann := mergeOverwrite (deepCopy (.Values.tagbio.ingress.annotations | default dict)) ((($b.ingress | default dict).annotations) | default dict) }}
+{{- if and $own .Values.tagbio.ingress.tls.enabled .Values.tagbio.ingress.clusterIssuer }}
+{{- $_ := set $ann "cert-manager.io/cluster-issuer" .Values.tagbio.ingress.clusterIssuer }}
+{{- end }}
+{{- with $ann }}
+  annotations:
+{{ toYaml . | indent 4 }}
+{{- end }}
+  name: tagbio-billing
+  namespace: {{ $ns }}
+spec:
+{{- if .Values.tagbio.ingress.className }}
+  ingressClassName: {{ .Values.tagbio.ingress.className }}
+{{- end }}
+{{- if .Values.tagbio.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.tagbio.hosts.cluster }}]
+      secretName: {{ ternary "tagbio-billing-tls" "tagbio-cluster" $own }}
+{{- end }}
+  rules:
+    - host: {{ .Values.tagbio.hosts.cluster }}
+      http:
+        paths:
+          - path: {{ printf "%s/v1" $prefix }}
+            pathType: Prefix
+            backend:
+              service:
+                name: tagbio-billing
+                port: {number: 8000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tagbio-billing
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      deployment.tag.bio/name: tagbio-billing
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              deployment.tag.bio/name: tagbio-mcp
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.tagbio.namespaces.app }}
+{{- range ($b.ingressNamespaces | default (list "traefik" "ingress-nginx")) }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+{{- end }}
+      ports:
+        - {port: 8000, protocol: TCP}
+{{- end }}
