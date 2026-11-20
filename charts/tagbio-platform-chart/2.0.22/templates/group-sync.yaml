@@ -1,0 +1,208 @@
+{{- /* 2.0.21: opt-in directory group sync (tagbio.groupSync). Keeps kung-services group membership
+(site_user_group rows with group = tagbioGroup) equal to an LDAP / Active Directory group's transitive user
+members. Data products are granted to the group in the admin console (kung-services capacitor_group_auth).
+Talks to kung-services as an admin caller (the same headers kung and the catalog seed Job send). */}}
+{{- with .Values.tagbio.groupSync }}
+{{- if .enabled }}
+{{- $site := .site | default $.Values.tagbio.site.name | required "tagbio.groupSync needs tagbio.groupSync.site or tagbio.site.name" }}
+{{- $ldap := .ldap }}
+{{- $uri := required "tagbio.groupSync.ldap.uri is required" $ldap.uri }}
+{{- $secret := required "tagbio.groupSync.ldap.credentialsSecret is required" $ldap.credentialsSecret }}
+{{- if not (has $ldap.auth (list "kerberos" "simple")) }}{{ fail "tagbio.groupSync.ldap.auth must be kerberos or simple" }}{{ end }}
+{{- if not .mappings }}{{ fail "tagbio.groupSync.mappings is empty" }}{{ end }}
+{{- $mappings := list }}
+{{- range .mappings }}
+{{- $g := .tagbioGroup | default .adGroup | required "each tagbio.groupSync.mappings entry needs tagbioGroup or adGroup" }}
+{{- if has $g (list "admin" "superadmin") }}{{ fail (printf "tagbio.groupSync: %s is reserved" $g) }}{{ end }}
+{{- $mappings = append $mappings (dict "adGroup" (.adGroup | default "") "adGroupDN" (.adGroupDN | default "") "tagbioGroup" $g) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tagbio-group-sync
+  namespace: {{ $.Values.tagbio.namespaces.app }}
+data:
+{{- if and (eq $ldap.auth "kerberos") $ldap.krb5Conf (not $ldap.krb5ConfConfigMap) }}
+  krb5.conf: |
+{{ $ldap.krb5Conf | indent 4 }}
+{{- end }}
+  mappings.json: {{ $mappings | toJson | quote }}
+  sync.sh: |
+    #!/bin/bash
+    # One pass per INTERVAL: directory group -> kung-services site_user_group rows (group = tagbioGroup).
+    set -uo pipefail
+    log() { echo "$(date -u +%FT%TZ) $*"; }
+    notify() {
+      log "$1"
+      [ -n "${SLACK_WEBHOOK_URL:-}" ] || return 0
+      jq -n --arg t "$1" '{text: $t}' | curl -fsS -m 20 -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null || log "slack post failed"
+    }
+    if [ "$INSTALL_PACKAGES" = true ]; then
+      apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        ldap-utils libsasl2-modules-gssapi-mit krb5-user curl jq ca-certificates >/dev/null 2>&1 || { log "package install failed"; exit 1; }
+    fi
+    mkdir -p /etc/ldap
+    { echo "REFERRALS off"; [ "$LDAP_AUTH" = kerberos ] && echo "SASL_NOCANON on"; } > /etc/ldap/ldap.conf
+    export KRB5CCNAME=FILE:/tmp/krb5cc
+    ldap() {
+      if [ "$LDAP_AUTH" = kerberos ]; then
+        ldapsearch -LLL -Q -Y GSSAPI -o ldif-wrap=no -H "$LDAP_URI" "$@"
+      else
+        ldapsearch -LLL -x -D "$LDAP_BIND_DN" -y /tmp/ldap-pw -o ldif-wrap=no -H "$LDAP_URI" "$@"
+      fi
+    }
+    login() {
+      if [ "$LDAP_AUTH" = kerberos ]; then
+        printf '%s\n' "$LDAP_PASSWORD" | kinit "$LDAP_PRINCIPAL" >/dev/null 2>/tmp/kinit.err
+      else
+        printf '%s' "$LDAP_PASSWORD" > /tmp/ldap-pw
+      fi
+    }
+    uri() { jq -rn --arg v "$1" '$v | @uri'; }
+    ks() { curl -fsS -m 30 -H 'x-tagbio-groups: admin' -H "x-tagbio-email: $ADMIN_EMAIL" "$@"; }
+    # LDIF value of a "name: v" / "name:: base64" line
+    ldif_value() { case "$1" in *":: "*) printf '%s' "${1#*:: }" | base64 -d ;; *) printf '%s' "${1#*: }" ;; esac; }
+
+    # Emails of the enabled transitive user members of a group (cn or DN), one per line, lowercase
+    members() {
+      local cn="$1" dn="$2" line
+      if [ -z "$dn" ]; then
+        line=$(ldap -b "$LDAP_SEARCH_BASE" "(&(objectClass=group)(cn=$cn))" dn | grep -E '^dn::? ' | head -1) || return 2
+        [ -n "$line" ] || { log "group '$cn' not found"; return 2; }
+        dn=$(ldif_value "$line")
+      fi
+      ldap -E pr=500/noprompt -b "$LDAP_SEARCH_BASE" \
+        "(&(objectCategory=person)(objectClass=user)(memberOf:1.2.840.113556.1.4.1941:=$dn))" \
+        "$EMAIL_ATTR" "$FALLBACK_EMAIL_ATTR" userAccountControl > /tmp/members.ldif || return 3
+      awk -v a="$(echo "$EMAIL_ATTR" | tr A-Z a-z)" -v b="$(echo "$FALLBACK_EMAIL_ATTR" | tr A-Z a-z)" '
+        function flush() { e = (m != "") ? m : f; if (seen && e != "" && int(uac / 2) % 2 == 0) print tolower(e); m = ""; f = ""; uac = 0; seen = 0 }
+        /^dn::? / { flush(); seen = 1; next }
+        /^#/ || /^$/ { next }
+        { k = tolower(substr($0, 1, index($0, ":") - 1)); v = $0; sub(/^[^:]*: */, "", v)
+          if (k == a) m = v; else if (k == b) f = v; else if (k == "useraccountcontrol") uac = v + 0 }
+        END { flush() }' /tmp/members.ldif | grep '@' | sort -u
+    }
+
+    sync_one() {
+      local cn="$1" dn="$2" group="$3" q desired current add remove n_des n_cur n_add n_rem u msg
+      desired=$(members "$cn" "$dn") || { notify ":warning: Tag.bio group sync ($SITE): could not read directory group ${cn:-$dn} - nothing changed."; return 1; }
+      q="site=$(uri "$SITE")&group=$(uri "$group")"
+      current=$(ks "$KS/db/site_user_group/?$q" | jq -r '.[].user' | tr A-Z a-z | sort -u) \
+        || { notify ":warning: Tag.bio group sync ($SITE): kung-services unavailable - nothing changed for $group."; return 1; }
+      add=$(comm -13 <(echo "$current") <(echo "$desired") | grep . || true)
+      remove=$(comm -23 <(echo "$current") <(echo "$desired") | grep . || true)
+      n_des=$(echo "$desired" | grep -c . || true); n_cur=$(echo "$current" | grep -c . || true)
+      n_add=$(echo "$add" | grep -c . || true); n_rem=$(echo "$remove" | grep -c . || true)
+      log "$group: directory $n_des, Tag.bio $n_cur, add $n_add, remove $n_rem"
+      if [ "$n_rem" -gt 0 ] && { [ "$n_des" -eq 0 ] || { [ "$n_cur" -ge 10 ] && [ $((n_rem * 100)) -gt $((MAX_REMOVE_PERCENT * n_cur)) ]; }; }; then
+        notify ":warning: Tag.bio group sync ($SITE): $group would remove $n_rem of $n_cur members (directory returned $n_des) - removals skipped, check the directory group."
+        remove=""; n_rem=0
+      fi
+      [ "$n_add" -eq 0 ] && [ "$n_rem" -eq 0 ] && return 0
+      if [ "$DRY_RUN" = true ]; then
+        log "$group: dry run - would add $n_add, remove $n_rem"
+        return 0
+      fi
+      local ok_add=0 ok_rem=0
+      for u in $add; do
+        ks -o /dev/null "$KS/db/users/$(uri "$u")/" 2>/dev/null \
+          || ks -o /dev/null -X POST -H 'Content-Type: application/json' -d "$(jq -cn --arg k "$u" '{key: $k}')" "$KS/db/users/" || true
+        ks -o /dev/null -X POST -H 'Content-Type: application/json' \
+          -d "$(jq -cn --arg s "$SITE" --arg u "$u" --arg g "$group" '{site: $s, user: $u, group: $g}')" "$KS/db/site_user_group/" \
+          && { ok_add=$((ok_add + 1)); log "$group: added $u"; } || log "$group: FAILED to add $u"
+      done
+      for u in $remove; do
+        [ -n "$u" ] || continue
+        ks -o /dev/null -X DELETE "$KS/db/site_user_group/?$q&user=$(uri "$u")" \
+          && { ok_rem=$((ok_rem + 1)); log "$group: removed $u"; } || log "$group: FAILED to remove $u"
+      done
+      msg="Tag.bio group sync ($SITE): $group - added $ok_add, removed $ok_rem ($n_des members)."
+      [ "$ok_add" -ne "$n_add" ] || [ "$ok_rem" -ne "$n_rem" ] && msg=":warning: $msg Some changes failed, see the tagbio-group-sync log."
+      notify "$msg"
+    }
+
+    log "group sync for site $SITE every ${INTERVAL}s (dry run: $DRY_RUN)"
+    while true; do
+      if login; then
+        jq -c '.[]' /etc/tagbio-group-sync/mappings.json | while read -r m; do
+          sync_one "$(jq -r .adGroup <<<"$m")" "$(jq -r .adGroupDN <<<"$m")" "$(jq -r .tagbioGroup <<<"$m")"
+        done
+      else
+        notify ":warning: Tag.bio group sync ($SITE): directory login failed - nothing changed."
+      fi
+      sleep "$INTERVAL"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tagbio-group-sync
+  namespace: {{ $.Values.tagbio.namespaces.app }}
+  labels:
+    app.kubernetes.io/name: tagbio-group-sync
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tagbio-group-sync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tagbio-group-sync
+        firewall.tag.bio/role: gateway
+      annotations:
+        checksum/config: {{ list $mappings $ldap .dryRun .intervalSeconds | toJson | sha256sum }}
+{{- with $.Values.tagbio.podAnnotations }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: sync
+          image: {{ .image }}
+          command: ["bash", "/etc/tagbio-group-sync/sync.sh"]
+          env:
+            - {name: SITE, value: {{ $site | quote }}}
+            - {name: KS, value: "http://kung-services:8001"}
+            - {name: ADMIN_EMAIL, value: {{ $.Values.tagbio.site.adminEmail | quote }}}
+            - {name: INTERVAL, value: {{ .intervalSeconds | quote }}}
+            - {name: DRY_RUN, value: {{ ternary "true" "false" (eq (toString .dryRun) "true") | quote }}}
+            - {name: INSTALL_PACKAGES, value: {{ ternary "true" "false" (eq (toString .installPackages) "true") | quote }}}
+            - {name: MAX_REMOVE_PERCENT, value: {{ .maxRemovePercent | quote }}}
+            - {name: LDAP_URI, value: {{ $uri | quote }}}
+            - {name: LDAP_SEARCH_BASE, value: {{ $ldap.searchBase | quote }}}
+            - {name: LDAP_AUTH, value: {{ $ldap.auth | quote }}}
+            - {name: EMAIL_ATTR, value: {{ $ldap.emailAttribute | quote }}}
+            - {name: FALLBACK_EMAIL_ATTR, value: {{ $ldap.fallbackEmailAttribute | quote }}}
+            - name: LDAP_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret | quote }}, key: {{ $ldap.passwordKey | quote }}}}
+{{- if eq $ldap.auth "kerberos" }}
+            - name: LDAP_PRINCIPAL
+              valueFrom: {secretKeyRef: {name: {{ $secret | quote }}, key: {{ $ldap.principalKey | quote }}}}
+            - {name: KRB5_CONFIG, value: /etc/tagbio-group-sync-krb5/krb5.conf}
+{{- else }}
+            - name: LDAP_BIND_DN
+              valueFrom: {secretKeyRef: {name: {{ $secret | quote }}, key: {{ $ldap.bindDNKey | quote }}}}
+{{- end }}
+{{- if .slackWebhookSecret }}
+            - name: SLACK_WEBHOOK_URL
+              valueFrom: {secretKeyRef: {name: {{ .slackWebhookSecret | quote }}, key: url}}
+{{- end }}
+          resources:
+{{ toYaml .resources | indent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/tagbio-group-sync, readOnly: true}
+{{- if eq $ldap.auth "kerberos" }}
+            - {name: krb5, mountPath: /etc/tagbio-group-sync-krb5, readOnly: true}
+{{- end }}
+      volumes:
+        - name: config
+          configMap: {name: tagbio-group-sync}
+{{- if eq $ldap.auth "kerberos" }}
+        - name: krb5
+          configMap: {name: {{ $ldap.krb5ConfConfigMap | default "tagbio-group-sync" | quote }}}
+{{- end }}
+{{- end }}
+{{- end }}
