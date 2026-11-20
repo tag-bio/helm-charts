@@ -1,0 +1,16 @@
+{{- /* 2.0.22: optional PodDisruptionBudget per core-stack Deployment (tagbio.coreStack.podDisruptionBudgets.<name>). */}}
+{{- range $name, $pdb := ((.Values.tagbio.coreStack | default dict).podDisruptionBudgets | default dict) }}
+{{- if $pdb }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.tagbio.namespaces.app }}
+spec:
+{{ toYaml $pdb | indent 2 }}
+  selector:
+    matchLabels:
+      deployment.tag.bio/name: {{ $name }}
+{{- end }}
+{{- end }}

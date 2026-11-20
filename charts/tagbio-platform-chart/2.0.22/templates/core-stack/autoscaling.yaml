@@ -1,0 +1,46 @@
+{{- /* 2.0.11: optional HPA + PDB for the stateless request path (tagbio-mcp, kung).
+kung-services stays single-replica (SQLite). Needs metrics-server (AKS/EKS/GKE ship it). */}}
+{{- $targets := list }}
+{{- $mcp := .Values.tagbio.mcp | default dict }}
+{{- if and $mcp.enabled $mcp.autoscaling $mcp.autoscaling.enabled }}
+{{- $targets = append $targets (dict "name" "tagbio-mcp" "a" $mcp.autoscaling) }}
+{{- end }}
+{{- if and .Values.tagbio.kung.autoscaling .Values.tagbio.kung.autoscaling.enabled }}
+{{- $targets = append $targets (dict "name" "kung" "a" .Values.tagbio.kung.autoscaling) }}
+{{- end }}
+{{- range $targets }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.tagbio.namespaces.app }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .name }}
+  minReplicas: {{ .a.minReplicas | default 2 | int64 }}
+  maxReplicas: {{ .a.maxReplicas | default 6 | int64 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: AverageValue
+          averageValue: {{ .a.targetCPUAverageValue | default "500m" | quote }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.tagbio.namespaces.app }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      deployment.tag.bio/name: {{ .name }}
+{{- end }}

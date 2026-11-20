@@ -1,0 +1,63 @@
+{{- /* 2.0.14: each PV/PVC below renders only if it does not exist yet (lookup). They are hooks, and Helm's default hook policy deletes and recreates hook objects before every run: on an upgrade that deleted an in-use PV (stuck Terminating behind pv-protection) and the hook timed out (mcp-prod, 2026-10-22). Offline renders (no cluster) are unchanged. */}}
+{{- /* 2.0: app/system shared-storage PV+PVC (pre-install hooks). Off by default: the 1.3 sites create these by hand; UCSF/muhdo set it true */}}
+{{- if .Values.tagbio.storage.createAppVolumes }}
+---
+{{- if not (lookup "v1" "PersistentVolume" "" "tagbio-system-storage") }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tagbio-system-storage
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-13"
+    helm.sh/resource-policy: keep
+spec:
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+  azureFile:
+    readOnly: false
+    secretName: {{ .Values.environment.azure.secret.name }}
+    secretNamespace: {{ .Values.environment.azure.secret.namespace }}
+    shareName: {{ .Values.environment.azure.fileshare.name }}
+  mountOptions:
+    - 'dir_mode=0755'
+    - 'file_mode=0644'
+    - 'nolock'
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+  nfs:
+    path: {{ .Values.environment.nfs.path }}
+    readOnly: false
+    server: {{ .Values.environment.nfs.host }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "efs" }}
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: {{ .Values.environment.efs.fileSystemId }}:{{ .Values.environment.nfs.path }}
+{{ end }}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1000Gi
+{{- end }}
+---
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Values.tagbio.namespaces.system "tagbio-storage") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tagbio-storage
+  namespace: {{ .Values.tagbio.namespaces.system }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-13"
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1000Gi
+  volumeName: tagbio-system-storage
+{{- end }}
+{{- end }}

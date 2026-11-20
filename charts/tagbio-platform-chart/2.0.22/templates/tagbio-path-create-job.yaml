@@ -1,0 +1,64 @@
+{{- /* 2.0: app/system shared-storage PV+PVC (pre-install hooks). Off by default: the 1.3 sites create these by hand; UCSF/muhdo set it true */}}
+{{- if .Values.tagbio.storage.createAppVolumes }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  name: tagbio-path-create-job-{{ .Chart.Version }}
+spec:
+  template:
+    metadata:
+      labels:
+        job-name: tagbio-path-create-job-{{ .Chart.Version }}
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: NotIn
+                values:
+                - "true"
+            weight: 100
+          - preference:
+              matchExpressions:
+              - key: tagbio-controller
+                operator: DoesNotExist
+            weight: 99
+      containers:
+        - command:
+          - sh
+          - -c
+          - mkdir -p /storage/blobs /storage/kung-services/db /storage/login-service; chmod -R 755 /storage
+          image: platform-registry.dev.tag.bio/alpine:{{ .Values.tagbio.imageTag }}
+          imagePullPolicy: IfNotPresent
+          name: tagbio-path-create-job-mkdir
+          volumeMounts:
+            - name: storage-root
+              mountPath: /storage
+      imagePullSecrets:
+        - name: tagbio-platform-registry-creds
+        - name: tagbio-cluster-registry-creds
+      restartPolicy: OnFailure
+      volumes:
+        - name: storage-root
+{{ if eq .Values.environment.storageVolumeType "azureFile" }}
+          azureFile:
+            readOnly: false
+            secretName: {{ .Values.environment.azure.secret.name }}
+            shareName: {{ .Values.environment.azure.fileshare.name }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "nfs" }}
+          nfs:
+            server: {{ .Values.environment.nfs.host }}
+            path: {{ .Values.environment.nfs.path }}
+{{ end }}
+{{ if eq .Values.environment.storageVolumeType "efs" }}
+          csi:
+            driver: efs.csi.aws.com
+            volumeHandle: {{ .Values.environment.efs.fileSystemId }}:{{ .Values.environment.nfs.path }}
+{{ end }} 
+{{- end }}
