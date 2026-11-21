@@ -1,0 +1,38 @@
+{{- /* 2.0.14: each PV/PVC below renders only if it does not exist yet (lookup). They are hooks, and Helm's default hook policy deletes and recreates hook objects before every run: on an upgrade that deleted an in-use PV (stuck Terminating behind pv-protection) and the hook timed out (mcp-prod, 2026-10-22). Offline renders (no cluster) are unchanged. */}}
+{{- /* 2.0.2: sites whose jupyter PV/PVCs pre-exist with an immutable volume source (UCSF: NFS against the EFS DNS name) set tagbio.storage.createJupyterVolumes=false; the existing objects stay untouched. */}}
+{{- if and (ne (toString .Values.jupyterhub.enabled) "false") .Values.tagbio.storage.createJupyterVolumes }}
+---
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace "tagbio-jupyter-users-storage-pvc") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tagbio-jupyter-users-storage-pvc
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1000Gi
+  volumeName: tagbio-jupyter-users-storage-pv
+{{- end }}
+---
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace "tagbio-jupyter-users-shared-storage-pvc") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tagbio-jupyter-users-shared-storage-pvc
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1000Gi
+  volumeName: tagbio-jupyter-users-shared-storage-pv
+{{- end }}
+{{- end }}
